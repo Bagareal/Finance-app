@@ -79,6 +79,8 @@ script="$(curl -fsSL "https://raw.githubusercontent.com/$FA_REPO/$FA_BRANCH/inst
 exec bash -c "$script" update "$@"
 EOF
 chmod +x /usr/local/bin/update
+# la console di Proxmox (pct enter/exec) ha un PATH senza /usr/local/bin
+ln -sf /usr/local/bin/update /usr/bin/update
 ok "Servizio e comando 'update' configurati"
 
 info "Scarico e avvio Finance App..."

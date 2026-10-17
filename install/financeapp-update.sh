@@ -20,6 +20,9 @@ die() { echo -e "${RD}✘ $*${CL}" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Esegui come root."
 
+# ripara le installazioni vecchie: il comando `update` deve essere raggiungibile dal PATH minimo di Proxmox
+[[ -x /usr/local/bin/update && ! -e /usr/bin/update ]] && ln -sf /usr/local/bin/update /usr/bin/update
+
 case "$(dpkg --print-architecture)" in
   amd64) ARCH=amd64 ;;
   arm64) ARCH=arm64 ;;
