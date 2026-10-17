@@ -1,7 +1,7 @@
 // Service worker minimale: serve la shell dell'app dalla cache se la rete manca.
 // I dati (/api) non vengono mai messi in cache.
-const CACHE = 'fa-shell-v2';
-const SHELL = ['/', '/app.js', '/i18n.js', '/style.css', '/vendor/preact-htm.js', '/manifest.webmanifest', '/icon-192.png'];
+const CACHE = 'fa-shell-v3';
+const SHELL = ['/', '/app.js', '/i18n.js', '/style.css', '/vendor/preact-htm.js', '/manifest.webmanifest', '/app-icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -41,6 +41,22 @@ const ACC_TYPES = { corrente: 'Checking', contanti: 'Cash', risparmio: 'Savings'
 const NEEDS_MOVE = 'choose where to move them';
 const TOO_MANY = 'too many attempts';
 
+// Themes are a per-device preference (localStorage); the colours live in style.css under [data-theme].
+const THEMES = {
+  auto: { label: 'Automatic (system)', colors: null },
+  light: { label: 'Light', colors: ['#f4f6f7', '#ffffff', '#0f766e'] },
+  dark: { label: 'Dark', colors: ['#0e1417', '#172026', '#2dd4bf'] },
+  midnight: { label: 'Midnight', colors: ['#000000', '#0c0c14', '#818cf8'] },
+  sand: { label: 'Sand', colors: ['#f5efe4', '#fffaf1', '#b45309'] },
+};
+const savedTheme = () => { try { return localStorage.getItem('fa_theme') || 'auto'; } catch { return 'auto'; } };
+function applyTheme(name) {
+  const el = document.documentElement;
+  if (!THEMES[name] || name === 'auto') el.removeAttribute('data-theme'); else el.setAttribute('data-theme', name);
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', getComputedStyle(el).getPropertyValue('--surface').trim() || '#0f766e');
+}
+
 const toast = (msg) => window.dispatchEvent(new CustomEvent('fa-toast', { detail: msg }));
 
 function useLoad(fn, deps) {
@@ -574,6 +590,23 @@ function QuickUnlock({ st, reload }) {
       ${(st.pin || st.bio) && html`<div style="margin-top:14px"><button class="btn" onClick=${lockNow}>${t('Lock now')}</button></div>`}</div></div>`;
 }
 
+function Appearance() {
+  const [theme, setTheme] = useState(savedTheme);
+  const pick = (name) => {
+    try { localStorage.setItem('fa_theme', name); } catch { /* private mode: the theme just won't persist */ }
+    applyTheme(name);
+    setTheme(name);
+  };
+  return html`<div class="card"><h2>${t('Appearance')}</h2>
+    <div class="themes" role="radiogroup" aria-label=${t('Theme')}>
+      ${Object.entries(THEMES).map(([k, v]) => html`<button type="button" role="radio" aria-checked=${theme === k} class=${'theme' + (theme === k ? ' on' : '')} onClick=${() => pick(k)}>
+        <span class="swatch" style=${v.colors ? 'background:' + v.colors[0] : 'background:linear-gradient(135deg,#f4f6f7 50%,#0e1417 50%)'}>
+          ${v.colors && html`<i style=${'background:' + v.colors[1]}></i><b style=${'background:' + v.colors[2]}></b>`}</span>
+        <span>${t(v.label)}</span></button>`)}
+    </div>
+    <p class="muted" style="margin:10px 0 0;font-size:.85rem">${t('Saved on this device only.')}</p></div>`;
+}
+
 function Preferences({ st, reload }) {
   const [err, setErr] = useState('');
   const change = async (patch) => {
@@ -607,6 +640,7 @@ function Settings({ ctx, st, reload, onLogout }) {
     <div class="head"><h1>${t('Settings')}</h1></div>
     <div class="cols2">
       <div>
+        <${Appearance} />
         <${Preferences} st=${st} reload=${reload} />
         <${QuickUnlock} st=${st} reload=${reload} />
         <div class="card"><h2>${t('Change password')}</h2>
@@ -840,5 +874,6 @@ function App() {
   return html`<${Shell} key=${st.lang + st.currency} st=${st} reload=${load} onLogout=${async () => { sessionStorage.removeItem('fa_unlocked'); await api('POST', '/logout'); load(); }} />`;
 }
 
+applyTheme(savedTheme());
 render(html`<${App} />`, document.getElementById('app'));
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
