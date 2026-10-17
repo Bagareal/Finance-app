@@ -65,6 +65,8 @@ const ICONS = {
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14 3h-4l-.6 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 005 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2L10 21h4l.6-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   eye: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
+  pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z',
+  trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
   eyeoff: 'M17.9 17.9A10.9 10.9 0 0112 19c-7 0-11-7-11-7a19 19 0 014.2-5.2M9.9 4.2A10.7 10.7 0 0112 4c7 0 11 7 11 7a19 19 0 01-3.2 4.2M1 1l22 22M14.1 14.1a3 3 0 01-4.2-4.2',
 };
 
@@ -86,7 +88,7 @@ function Confirm({ title, text, label, onYes, onClose }) {
     <p>${text}</p>
     <div class="actions">
       <button class="btn" onClick=${onClose}>${t('Cancel')}</button>
-      <button class="btn primary" disabled=${busy} onClick=${async () => { setBusy(true); await onYes(); }}>${label || t('Delete')}</button>
+      <button class=${'btn primary' + (label ? '' : ' warn')} disabled=${busy} onClick=${async () => { setBusy(true); await onYes(); }}>${label || t('Delete')}</button>
     </div></${Modal}>`;
 }
 
@@ -109,6 +111,10 @@ const Stats = ({ s }) => html`<div class="stats">
   <div class="stat"><small>${t('Saved')}</small><b class=${'num ' + (s.saved < 0 ? 'expense' : '')}>${money(s.saved)}</b></div></div>`;
 
 const EyeBtn = ({ ctx }) => html`<button class="btn small icon" aria-label=${ctx.hide ? t('Show balances') : t('Hide balances')} title=${ctx.hide ? t('Show balances') : t('Hide balances')} onClick=${ctx.toggleHide}><${Icon} d=${ICONS[ctx.hide ? 'eyeoff' : 'eye']} /></button>`;
+
+const RowActions = ({ onEdit, onDelete }) => html`<span class="row-actions">
+  <button class="iconbtn" aria-label=${t('Edit')} title=${t('Edit')} onClick=${onEdit}><${Icon} d=${ICONS.pencil} /></button>
+  <button class="iconbtn danger" aria-label=${t('Delete')} title=${t('Delete')} onClick=${onDelete}><${Icon} d=${ICONS.trash} /></button></span>`;
 
 const Status = ({ s }) => s.error ? html`<p class="err">${s.error}</p>` : s.loading && !s.data ? html`<p class="muted">${t('Loading…')}</p>` : null;
 
@@ -275,11 +281,12 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
 function TxRow({ ctx, tx }) {
   const transfer = tx.kind === 'transfer';
   const title = transfer ? `${ctx.accName(tx.account_id)} → ${ctx.accName(tx.to_account_id)}` : ctx.catLabel(tx.category_id);
-  return html`<div class="row click" onClick=${() => ctx.openTx(tx)}>
+  return html`<div class="row">
     <span class="dot" style=${'background:' + (transfer ? 'var(--transfer)' : ctx.catColor(tx.category_id))}></span>
     <div class="grow"><div>${title}${tx.recurring_id && html`<span class="pill">${t('recurring')}</span>`}</div>
       <div class="muted" style="font-size:.85rem">${[!transfer && ctx.accName(tx.account_id), tx.note].filter(Boolean).join(' · ') || ' '}</div></div>
-    <b class=${'num ' + tx.kind}>${sign(tx.kind, tx.amount_cents)}</b></div>`;
+    <b class=${'num ' + tx.kind}>${sign(tx.kind, tx.amount_cents)}</b>
+    <${RowActions} onEdit=${() => ctx.openTx(tx)} onDelete=${() => ctx.deleteTx(tx)} /></div>`;
 }
 
 function TxList({ ctx, list, dates = true }) {
@@ -527,11 +534,12 @@ function Recurring({ ctx }) {
     <div class="head"><h1>${t('Recurring')}</h1><button class="btn primary" onClick=${() => ctx.openRec(null)}>${t('New')}</button></div>
     <${Status} s=${res} />
     <div class="card">${list.length ? list.map((r) => html`<div class="row">
-      <div class="grow click" style="cursor:pointer" onClick=${() => ctx.openRec(r)}>
+      <div class="grow">
         <div>${r.kind === 'transfer' ? `${ctx.accName(r.account_id)} → ${ctx.accName(r.to_account_id)}` : ctx.catLabel(r.category_id)}${!r.active && html`<span class="pill">${t('paused')}</span>`}</div>
         <div class="muted" style="font-size:.85rem">${t(FREQ[r.freq])} · ${r.active ? t('next {date}', { date: shortDate(r.next_date) }) : t('stopped')}${r.note ? ' · ' + r.note : ''}</div></div>
       <b class=${'num ' + r.kind}>${sign(r.kind, r.amount_cents)}</b>
-      <button class="btn small" onClick=${() => toggle(r)}>${r.active ? t('Pause') : t('Resume')}</button></div>`)
+      <button class="btn small" onClick=${() => toggle(r)}>${r.active ? t('Pause') : t('Resume')}</button>
+      <${RowActions} onEdit=${() => ctx.openRec(r)} onDelete=${() => ctx.deleteRec(r)} /></div>`)
       : !res.loading && html`<div class="empty">${t('No recurring items. Add rent, salary, subscriptions…')}</div>`}</div></div>`;
 }
 
@@ -693,18 +701,35 @@ const TABS = [
 ];
 const PAGES = { home: Home, transactions: Transactions, summary: Summary, accounts: Accounts, categories: Categories, recurring: Recurring, more: More };
 const WIDE = ['home', 'summary'];
+// addresses used by the first versions (Italian), still open in browsers and PWAs after an update
+const LEGACY_ROUTES = { movimenti: 'transactions', riepilogo: 'summary', conti: 'accounts', categorie: 'categories', ricorrenti: 'recurring', impostazioni: 'settings', altro: 'more' };
+const KNOWN_PAGES = [...Object.keys(PAGES), 'settings'];
+/** Reads the page from the address bar and rewrites the address if it was a legacy or unknown one. */
+function normalizeHash() {
+  const page = pageOf(location.hash.slice(2) || 'home');
+  if (location.hash !== '#/' + page) history.replaceState(null, '', '#/' + page);
+  return page;
+}
+
+/** The page for an address: legacy addresses are translated, unknown ones fall back to Home. */
+function pageOf(route) {
+  const key = route.split('/')[0];
+  const page = LEGACY_ROUTES[key] || key;
+  return KNOWN_PAGES.includes(page) ? page : 'home';
+}
 
 function Shell({ st, reload, onLogout }) {
-  const [route, setRoute] = useState(() => location.hash.slice(2) || 'home');
+  const [route, setRoute] = useState(normalizeHash);
   const [data, setData] = useState({ accounts: [], categories: [], loaded: false });
   const [tick, setTick] = useState(0);
   const [modal, setModal] = useState(null);
   const [conf, setConf] = useState(null);
   const [msg, setMsg] = useState('');
+  const [delScope, setDelScope] = useState(null); // a transaction from a recurring series waiting for the scope choice
   const [hide, setHide] = useState(() => { try { return localStorage.getItem('fa_hide') === '1'; } catch { return false; } });
 
   useEffect(() => {
-    const h = () => setRoute(location.hash.slice(2) || 'home');
+    const h = () => setRoute(normalizeHash());
     const toastHandler = (e) => { setMsg(e.detail); setTimeout(() => setMsg(''), 3000); };
     window.addEventListener('hashchange', h);
     window.addEventListener('fa-toast', toastHandler);
@@ -728,11 +753,19 @@ function Shell({ st, reload, onLogout }) {
       openTx: (item, kind) => setModal({ item, kind }),
       openRec: (item) => setModal({ item, rec: true }),
       confirm: (c) => setConf(c),
+      deleteTx: (tx) => (tx.recurring_id ? setDelScope(tx) : setConf({
+        title: t('Delete the transaction?'), text: t('This cannot be undone.'),
+        run: async () => { await api('DELETE', `/transactions/${tx.id}`); setTick((x) => x + 1); },
+      })),
+      deleteRec: (r) => setConf({
+        title: t('Delete the recurring item?'), text: t('Transactions already created are kept.'),
+        run: async () => { await api('DELETE', `/recurring/${r.id}`); setTick((x) => x + 1); },
+      }),
     };
   }, [data, tick, hide]);
 
   if (!data.loaded) return null;
-  const page = route.split('/')[0];
+  const page = pageOf(route);
   const Page = PAGES[page] || Home;
   return html`<div class="shell">
     <nav class="tabs"><div class="brand">Finance App</div>
@@ -741,6 +774,11 @@ function Shell({ st, reload, onLogout }) {
     <button class="fab" aria-label=${t('New transaction')} onClick=${() => ctx.openTx(null)}>+</button>
     ${modal && html`<${FlowModal} ctx=${ctx} item=${modal.item} kind=${modal.kind} rec=${modal.rec} onClose=${() => setModal(null)} />`}
     ${conf && html`<${Confirm} title=${conf.title} text=${conf.text} onClose=${() => setConf(null)} onYes=${async () => { try { await conf.run(); } catch (e) { toast(e.message); } setConf(null); }} />`}
+    ${delScope && html`<${ScopeModal} type="del" onClose=${() => setDelScope(null)}
+      onPick=${async (scope) => {
+        try { await api('DELETE', `/transactions/${delScope.id}?scope=${scope}`); ctx.bump(); } catch (e) { toast(e.message); }
+        setDelScope(null);
+      }} />`}
     ${msg && html`<div class="toast">${msg}</div>`}</div>`;
 }
 
