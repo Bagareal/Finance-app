@@ -2,12 +2,14 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -331,8 +333,18 @@ func (s *Server) routes(web fs.FS) {
 		writeErr(w, httpError{http.StatusNotFound, "non trovato"})
 	})
 
+	// L'HTML non va mai in cache e punta agli asset con ?v=<versione>: a ogni release gli URL cambiano,
+	// così né il browser né un reverse proxy / CDN possono servire file vecchi.
+	index, _ := fs.ReadFile(web, "index.html")
+	page := bytes.ReplaceAll(index, []byte("__V__"), []byte(url.QueryEscape(s.version)))
 	files := http.FileServerFS(web)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write(page)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
 	})

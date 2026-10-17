@@ -83,7 +83,7 @@ do_update() {
   pct status "$ctid" 2>/dev/null | grep -q running || die "Il container $ctid non esiste o non è avviato."
   pct exec "$ctid" -- test -x /usr/local/bin/update || die "Il container $ctid non sembra un'installazione di $APP."
   msg_info "Aggiorno $APP nel container $ctid..."
-  pct exec "$ctid" -- update
+  pct exec "$ctid" -- /usr/local/bin/update
 }
 
 # ---------------------------------------------------------------- install
