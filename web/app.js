@@ -1,4 +1,4 @@
-import { html, render, useState, useEffect, useMemo } from './vendor/preact-htm.js';
+import { html, render, useState, useEffect, useMemo, useRef } from './vendor/preact-htm.js';
 
 /* ---------- utilità ---------- */
 
@@ -10,7 +10,7 @@ const api = async (method, path, body) => {
     opt.body = csv ? body : JSON.stringify(body);
   }
   const r = await fetch('/api' + path, opt);
-  if (r.status === 401 && !path.startsWith('/login') && !path.startsWith('/password')) {
+  if (r.status === 401 && !/^\/(login|password|pin|bio|setup)/.test(path)) {
     window.dispatchEvent(new Event('fa-unauth'));
     throw new Error('Accesso richiesto');
   }
@@ -63,6 +63,9 @@ const ICONS = {
   repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3',
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14 3h-4l-.6 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 005 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2L10 21h4l.6-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  eye: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
+  eyeoff: 'M17.9 17.9A10.9 10.9 0 0112 19c-7 0-11-7-11-7a19 19 0 014.2-5.2M9.9 4.2A10.7 10.7 0 0112 4c7 0 11 7 11 7a19 19 0 01-3.2 4.2M1 1l22 22M14.1 14.1a3 3 0 01-4.2-4.2',
+  back: 'M5 12h14M5 12l6-6M5 12l6 6',
 };
 
 /* ---------- componenti base ---------- */
@@ -104,6 +107,42 @@ const Stats = ({ s }) => html`<div class="stats">
   <div class="stat"><small>Guadagnato</small><b class="income num">${money(s.income)}</b></div>
   <div class="stat"><small>Speso</small><b class="expense num">${money(s.expense)}</b></div>
   <div class="stat"><small>Risparmiato</small><b class=${'num ' + (s.saved < 0 ? 'expense' : '')}>${money(s.saved)}</b></div></div>`;
+
+const EyeBtn = ({ ctx }) => html`<button class="btn small icon" aria-label=${ctx.hide ? 'Mostra i saldi' : 'Nascondi i saldi'} title=${ctx.hide ? 'Mostra i saldi' : 'Nascondi i saldi'} onClick=${ctx.toggleHide}><${Icon} d=${ICONS[ctx.hide ? 'eyeoff' : 'eye']} /></button>`;
+
+/* ---------- biometria (WebAuthn) ---------- */
+
+const b64u = {
+  enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  dec: (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)),
+};
+const bioSupported = async () => !!(window.isSecureContext && window.PublicKeyCredential &&
+  (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false)));
+
+async function bioRegister() {
+  const o = await api('POST', '/bio/register/begin');
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: b64u.dec(o.challenge), rp: o.rp, user: { ...o.user, id: b64u.dec(o.user.id) },
+    pubKeyCredParams: o.pubKeyCredParams, authenticatorSelection: o.authenticatorSelection,
+    attestation: o.attestation, timeout: o.timeout,
+    excludeCredentials: o.excludeCredentials.map((c) => ({ ...c, id: b64u.dec(c.id) })),
+  } });
+  await api('POST', '/bio/register/finish', {
+    clientDataJSON: b64u.enc(cred.response.clientDataJSON), attestationObject: b64u.enc(cred.response.attestationObject),
+  });
+}
+
+async function bioUnlock() {
+  const o = await api('POST', '/bio/login/begin');
+  const a = await navigator.credentials.get({ publicKey: {
+    challenge: b64u.dec(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: o.userVerification,
+    allowCredentials: o.allowCredentials.map((c) => ({ ...c, id: b64u.dec(c.id) })),
+  } });
+  await api('POST', '/bio/login/finish', {
+    id: b64u.enc(a.rawId), clientDataJSON: b64u.enc(a.response.clientDataJSON),
+    authenticatorData: b64u.enc(a.response.authenticatorData), signature: b64u.enc(a.response.signature),
+  });
+}
 
 const Status = ({ s }) => s.error ? html`<p class="err">${s.error}</p>` : s.loading && !s.data ? html`<p class="muted">Caricamento…</p>` : null;
 
@@ -223,22 +262,32 @@ const Fragment = ({ children }) => children;
 
 /* ---------- pagine ---------- */
 
+function AccountsCard({ ctx }) {
+  const live = ctx.accounts.filter((a) => !a.archived);
+  const total = live.reduce((s, a) => s + a.balance_cents, 0);
+  return html`<div class="card"><h2 style="display:flex;align-items:center;gap:8px">Conti <${EyeBtn} ctx=${ctx} />
+      <span class="muted num" style="margin-left:auto;font-weight:400">${ctx.bal(total)}</span></h2>
+    ${live.length ? live.map((a) => html`<div class="row"><div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${a.type}</div></div>
+      <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b></div>`)
+      : html`<div class="empty">Nessun conto. <a href="#/conti">Creane uno</a></div>`}</div>`;
+}
+
 function Home({ ctx }) {
   const now = new Date();
   const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
   const sum = useLoad(() => api('GET', `/summary?year=${ym.y}&month=${ym.m}`), [ym, ctx.tick]);
   const recent = useLoad(() => api('GET', '/transactions?limit=8'), [ctx.tick]);
-  const live = ctx.accounts.filter((a) => !a.archived);
-  const total = live.reduce((s, a) => s + a.balance_cents, 0);
   return html`<div>
     <div class="head"><h1>Home</h1><${MonthNav} ym=${ym} setYm=${setYm} /></div>
     <${Status} s=${sum} />
-    ${sum.data && html`<${Stats} s=${sum.data} />`}
-    <div class="card"><h2>Conti <span class="muted num" style="float:right;font-weight:400">${money(total)}</span></h2>
-      ${live.length ? live.map((a) => html`<div class="row"><div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${a.type}</div></div>
-        <b class=${'num ' + (a.balance_cents < 0 ? 'expense' : '')}>${money(a.balance_cents)}</b></div>`)
-        : html`<div class="empty">Nessun conto. <a href="#/conti">Creane uno</a></div>`}</div>
-    <div class="card"><h2>Ultimi movimenti</h2>${recent.data ? html`<${TxList} ctx=${ctx} list=${recent.data} dates=${false} />` : html`<${Status} s=${recent} />`}</div></div>`;
+    <div class="cols">
+      <div>
+        ${sum.data && html`<${Stats} s=${sum.data} />`}
+        <div class="card"><h2>Ultimi movimenti</h2>${recent.data ? html`<${TxList} ctx=${ctx} list=${recent.data} dates=${false} />` : html`<${Status} s=${recent} />`}</div>
+        ${sum.data && html`<div class="card desk-only"><h2>Spese per categoria</h2><${CatBreakdown} list=${sum.data.expenses} total=${sum.data.expense} kind="expense" /></div>`}
+      </div>
+      <div class="desk-only"><${AccountsCard} ctx=${ctx} /></div>
+    </div></div>`;
 }
 
 function Movimenti({ ctx }) {
@@ -315,10 +364,11 @@ function Riepilogo({ ctx }) {
     <div class="head"><${MonthNav} ym=${cur} setYm=${setYm} year=${year} /></div>
     <${Status} s=${res} />
     ${s && html`<${Stats} s=${s} />
-      <div class="card"><h2>Spese per categoria</h2><${CatBreakdown} list=${s.expenses} total=${s.expense} kind="expense" /></div>
-      <div class="card"><h2>Entrate per categoria</h2><${CatBreakdown} list=${s.incomes} total=${s.income} kind="income" /></div>
+      <div class="cols2">
+        <div class="card"><h2>Spese per categoria</h2><${CatBreakdown} list=${s.expenses} total=${s.expense} kind="expense" /></div>
+        <div class="card"><h2>Entrate per categoria</h2><${CatBreakdown} list=${s.incomes} total=${s.income} kind="income" /></div></div>
       <div class="card"><h2>Andamento ${cur.y}</h2><${Bars} months=${s.months} />
-        <div class="muted" style="font-size:.8rem;text-align:center"><span class="income">■</span> entrate &nbsp; <span class="expense">■</span> spese</div></div>`}</div>`;
+        <div class="muted" style="font-size:.8rem;text-align:center"><span class="income">■</span> entrate   <span class="expense">■</span> spese</div></div>`}</div>`;
 }
 
 function AccountModal({ ctx, item, onClose }) {
@@ -352,12 +402,12 @@ function Conti({ ctx }) {
   const total = live.reduce((s, a) => s + a.balance_cents, 0);
   const rows = (l) => l.map((a) => html`<div class="row click" onClick=${() => setEdit(a)}>
     <div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${a.type}</div></div>
-    <b class=${'num ' + (a.balance_cents < 0 ? 'expense' : '')}>${money(a.balance_cents)}</b></div>`);
+    <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b></div>`);
   return html`<div>
     <div class="head"><h1>Conti</h1><div style="display:flex;gap:8px">
       <button class="btn" onClick=${() => ctx.openTx(null, 'transfer')} disabled=${live.length < 2}>Trasferisci</button>
       <button class="btn primary" onClick=${() => setEdit({})}>Nuovo conto</button></div></div>
-    <div class="card"><h2>Totale <span class="num" style="float:right">${money(total)}</span></h2>
+    <div class="card"><h2 style="display:flex;align-items:center;gap:8px">Totale <${EyeBtn} ctx=${ctx} /><span class="num" style="margin-left:auto">${ctx.bal(total)}</span></h2>
       ${live.length ? rows(live) : html`<div class="empty">Crea il tuo primo conto</div>`}</div>
     ${old.length > 0 && html`<div class="card"><h2 class="muted">Archiviati</h2>${rows(old)}</div>`}
     ${edit && html`<${AccountModal} ctx=${ctx} item=${edit.id ? edit : null} onClose=${() => setEdit(null)} />`}</div>`;
@@ -403,7 +453,9 @@ function MoveModal({ ctx, cat, onClose }) {
 function Categorie({ ctx }) {
   const [kind, setKind] = useState('expense');
   const [modal, setModal] = useState(null);
+  const [open, setOpen] = useState({});
   const macros = ctx.categories.filter((c) => !c.parent_id && c.kind === kind);
+  const count = (k) => ctx.categories.filter((c) => !c.parent_id && c.kind === k).length;
   const remove = (c) => ctx.confirm({
     title: `Eliminare «${c.name}»?`, text: c.parent_id ? '' : 'Verranno eliminate anche le sue sottocategorie.',
     run: async () => {
@@ -411,18 +463,24 @@ function Categorie({ ctx }) {
       catch (e) { if (e.message.includes(NEEDS_MOVE)) setModal({ move: c }); else toast(e.message); }
     },
   });
-  const btns = (c, withSub) => html`<span style="display:flex;gap:4px">
-    ${withSub && html`<button class="btn small" onClick=${() => setModal({ parent: c, kind })}>+ Sotto</button>`}
+  const btns = (c, withSub) => html`<span style="display:flex;gap:4px" onClick=${(e) => e.stopPropagation()}>
+    ${withSub && html`<button class="btn small" onClick=${() => { setOpen({ ...open, [c.id]: true }); setModal({ parent: c, kind }); }}>+ Sotto</button>`}
     <button class="btn small" onClick=${() => setModal({ item: c, kind })}>Modifica</button>
     <button class="btn small danger" aria-label="Elimina" onClick=${() => remove(c)}>✕</button></span>`;
   return html`<div>
-    <div class="head"><h1>Categorie</h1>
-      <div class="seg"><button class=${kind === 'expense' ? 'on' : ''} onClick=${() => setKind('expense')}>Spese</button><button class=${kind === 'income' ? 'on' : ''} onClick=${() => setKind('income')}>Entrate</button></div></div>
+    <div class="head"><h1>Categorie</h1></div>
+    <div class="seg full" style="margin-bottom:14px">
+      <button class=${kind === 'expense' ? 'on' : ''} onClick=${() => setKind('expense')}>Spese (${count('expense')})</button>
+      <button class=${kind === 'income' ? 'on' : ''} onClick=${() => setKind('income')}>Entrate (${count('income')})</button></div>
     <div class="card">
-      ${macros.length ? macros.map((m, i) => html`<div>
-        <div class="row"><span class="dot" style=${'background:' + (m.color || PALETTE[i % PALETTE.length])}></span><div class="grow"><div><b>${m.name}</b></div></div>${btns(m, true)}</div>
-        ${ctx.categories.filter((c) => c.parent_id === m.id).map((s) => html`<div class="row subrow"><div class="grow"><div>${s.name}</div></div>${btns(s, false)}</div>`)}</div>`)
-        : html`<div class="empty">Nessuna categoria</div>`}
+      ${macros.length ? macros.map((m, i) => {
+        const subs = ctx.categories.filter((c) => c.parent_id === m.id);
+        return html`<div>
+          <div class=${'row' + (subs.length ? ' click' : '')} onClick=${() => subs.length && setOpen({ ...open, [m.id]: !open[m.id] })}>
+            <span class="dot" style=${'background:' + (m.color || PALETTE[i % PALETTE.length])}></span>
+            <div class="grow"><div><b>${m.name}</b>${subs.length ? html` <span class="muted">${open[m.id] ? '▾' : '▸'} ${subs.length}</span>` : ''}</div></div>${btns(m, true)}</div>
+          ${open[m.id] && subs.map((sc) => html`<div class="row subrow"><div class="grow"><div>${sc.name}</div></div>${btns(sc, false)}</div>`)}</div>`;
+      }) : html`<div class="empty">Nessuna categoria di ${kind === 'expense' ? 'spesa' : 'entrata'}</div>`}
       <div style="padding-top:10px"><button class="btn primary" onClick=${() => setModal({ kind })}>Nuova categoria</button></div></div>
     ${modal?.move ? html`<${MoveModal} ctx=${ctx} cat=${modal.move} onClose=${() => setModal(null)} />`
       : modal && html`<${CatModal} ctx=${ctx} state=${modal} onClose=${() => setModal(null)} />`}</div>`;
@@ -444,11 +502,35 @@ function Ricorrenti({ ctx }) {
       : !res.loading && html`<div class="empty">Nessuna ricorrenza. Aggiungi affitto, stipendio, abbonamenti…</div>`}</div></div>`;
 }
 
-function Impostazioni({ ctx, version, onLogout }) {
+function QuickUnlock({ st, reload }) {
+  const [pw, setPw] = useState('');
+  const [pin, setPin] = useState('');
+  const [bio, setBio] = useState(false);
+  useEffect(() => { bioSupported().then(setBio); }, []);
+  const run = async (fn, ok) => {
+    try { await fn(); toast(ok); setPw(''); setPin(''); reload(); } catch (e) { if (e.name !== 'NotAllowedError') toast(e.message || 'Operazione non riuscita'); }
+  };
+  const lockNow = async () => { sessionStorage.removeItem('fa_unlocked'); await api('POST', '/logout'); reload(); };
+  return html`<div class="card"><h2>Sblocco rapido</h2>
+    <p class="muted" style="margin-top:0">Dopo il primo accesso con la password puoi rientrare con un PIN${bio ? ' o con la biometria' : ''}. L'app si blocca da sola dopo 5 minuti in background.</p>
+    <label class="f">Password attuale<input type="password" autocomplete="current-password" value=${pw} onInput=${(e) => setPw(e.target.value)} /></label>
+    <label class="f">${st.pin ? 'Nuovo PIN' : 'PIN'} (4-6 cifre)<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" value=${pin} onInput=${(e) => setPin(e.target.value.replace(/\D/g, ''))} /></label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <button class="btn primary" onClick=${() => run(() => api('POST', '/pin/set', { password: pw, pin }), st.pin ? 'PIN aggiornato' : 'PIN attivato')}>${st.pin ? 'Cambia PIN' : 'Attiva PIN'}</button>
+      ${st.pin && html`<button class="btn danger" onClick=${() => run(() => api('POST', '/pin/remove', { password: pw }), 'PIN disattivato')}>Disattiva PIN</button>`}</div>
+    <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
+      ${bio ? (st.bio
+        ? html`<p style="margin-top:0">Biometria attiva su questo dispositivo.</p><button class="btn danger" onClick=${() => run(() => api('POST', '/bio/remove'), 'Biometria disattivata')}>Disattiva biometria</button>`
+        : html`<button class="btn" onClick=${() => run(bioRegister, 'Biometria attivata')}>Attiva impronta / Face ID su questo dispositivo</button>`)
+        : html`<p class="muted" style="margin:0">${window.isSecureContext ? 'La biometria non è disponibile su questo dispositivo.' : 'La biometria richiede HTTPS: apri l\'app da un indirizzo https:// (reverse proxy, Tailscale, dominio).'}</p>`}
+      ${(st.pin || st.bio) && html`<div style="margin-top:14px"><button class="btn" onClick=${lockNow}>Blocca ora</button></div>`}</div></div>`;
+}
+
+function Impostazioni({ ctx, st, reload, version, onLogout }) {
   const [pw, setPw] = useState({ current: '', next: '' });
   const [msg, setMsg] = useState('');
   const change = async () => {
-    try { await api('POST', '/password', { current: pw.current, new: pw.next }); setPw({ current: '', next: '' }); setMsg('Password aggiornata'); }
+    try { await api('POST', '/password', { current: pw.current, new: pw.next }); setPw({ current: '', next: '' }); setMsg('Password aggiornata. PIN e biometria vanno riattivati.'); reload(); }
     catch (e) { setMsg(e.message); }
   };
   const importCsv = async (e) => {
@@ -460,18 +542,25 @@ function Impostazioni({ ctx, version, onLogout }) {
   };
   return html`<div>
     <div class="head"><h1>Impostazioni</h1></div>
-    <div class="card"><h2>Dati</h2>
-      <p class="muted">Il CSV ha le colonne: data, tipo, importo, conto, conto_destinazione, categoria, sottocategoria, nota. Conti e categorie mancanti vengono creati.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <a class="btn" href="/api/export.csv" download>Esporta CSV</a>
-        <label class="btn" style="cursor:pointer">Importa CSV<input type="file" accept=".csv,text/csv" hidden onChange=${importCsv} /></label>
-        <a class="btn" href="/api/backup" download>Scarica backup</a></div></div>
-    <div class="card"><h2>Cambia password</h2>
-      <label class="f">Password attuale<input type="password" autocomplete="current-password" value=${pw.current} onInput=${(e) => setPw({ ...pw, current: e.target.value })} /></label>
-      <label class="f">Nuova password (min. 6 caratteri)<input type="password" autocomplete="new-password" value=${pw.next} onInput=${(e) => setPw({ ...pw, next: e.target.value })} /></label>
-      ${msg && html`<p class="muted">${msg}</p>`}
-      <button class="btn primary" onClick=${change}>Aggiorna</button></div>
-    <div class="card"><button class="btn" onClick=${onLogout}>Esci</button> <span class="muted" style="margin-left:8px">Versione ${version}</span></div></div>`;
+    <div class="cols2">
+      <div>
+        <${QuickUnlock} st=${st} reload=${reload} />
+        <div class="card"><h2>Cambia password</h2>
+          <label class="f">Password attuale<input type="password" autocomplete="current-password" value=${pw.current} onInput=${(e) => setPw({ ...pw, current: e.target.value })} /></label>
+          <label class="f">Nuova password (min. 6 caratteri)<input type="password" autocomplete="new-password" value=${pw.next} onInput=${(e) => setPw({ ...pw, next: e.target.value })} /></label>
+          ${msg && html`<p class="muted">${msg}</p>`}
+          <button class="btn primary" onClick=${change}>Aggiorna</button></div>
+      </div>
+      <div>
+        <div class="card"><h2>Dati</h2>
+          <p class="muted" style="margin-top:0">Il CSV ha le colonne: data, tipo, importo, conto, conto_destinazione, categoria, sottocategoria, nota. Conti e categorie mancanti vengono creati.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <a class="btn" href="/api/export.csv" download>Esporta CSV</a>
+            <label class="btn" style="cursor:pointer">Importa CSV<input type="file" accept=".csv,text/csv" hidden onChange=${importCsv} /></label>
+            <a class="btn" href="/api/backup" download>Scarica backup</a></div></div>
+        <div class="card"><button class="btn" onClick=${onLogout}>Esci</button> <span class="muted" style="margin-left:8px">Versione ${version}</span></div>
+      </div>
+    </div></div>`;
 }
 
 function Altro() {
@@ -482,7 +571,7 @@ function Altro() {
 
 /* ---------- accesso ---------- */
 
-function Auth({ setup, onDone }) {
+function Auth({ setup, onDone, onBack }) {
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [err, setErr] = useState('');
@@ -491,7 +580,7 @@ function Auth({ setup, onDone }) {
     e.preventDefault();
     if (setup && pw !== pw2) return setErr('Le password non coincidono');
     setBusy(true);
-    try { await api('POST', setup ? '/setup' : '/login', { password: pw }); onDone(); } catch (er) { setErr(er.message); setBusy(false); }
+    try { await api('POST', setup ? '/setup' : '/login', { password: pw }); sessionStorage.setItem('fa_unlocked', '1'); onDone(); } catch (er) { setErr(er.message); setBusy(false); }
   };
   return html`<form class="auth" onSubmit=${go}>
     <h1>Finance App</h1>
@@ -499,7 +588,50 @@ function Auth({ setup, onDone }) {
     <label class="f">Password<input type="password" autocomplete=${setup ? 'new-password' : 'current-password'} value=${pw} onInput=${(e) => setPw(e.target.value)} autofocus /></label>
     ${setup && html`<label class="f">Ripeti la password<input type="password" autocomplete="new-password" value=${pw2} onInput=${(e) => setPw2(e.target.value)} /></label>`}
     ${err && html`<p class="err">${err}</p>`}
-    <button class="btn primary" style="width:100%" disabled=${busy}>${setup ? 'Inizia' : 'Entra'}</button></form>`;
+    <button class="btn primary" style="width:100%" disabled=${busy}>${setup ? 'Inizia' : 'Entra'}</button>
+    ${onBack && html`<p style="margin-top:14px"><a href="#" onClick=${(e) => { e.preventDefault(); onBack(); }}>← Torna al PIN</a></p>`}</form>`;
+}
+
+function Lock({ st, onDone, onPassword }) {
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const len = st.pin_len || 4;
+  const bioOk = st.bio && window.isSecureContext;
+  const unlocked = () => { sessionStorage.setItem('fa_unlocked', '1'); onDone(); };
+  const tryBio = async () => {
+    try { await bioUnlock(); unlocked(); } catch (e) { if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') setErr(e.message || 'Biometria non riuscita'); }
+  };
+  useEffect(() => { if (bioOk) tryBio(); }, []);
+  const submit = async (value) => {
+    setBusy(true);
+    try { await api('POST', '/pin/login', { pin: value }); unlocked(); }
+    catch (e) { setErr(e.message); setPin(''); setBusy(false); if (e.message.includes('troppi')) setTimeout(onDone, 1200); }
+  };
+  const press = (d) => {
+    if (busy) return;
+    setErr('');
+    const next = (pin + d).slice(0, len);
+    setPin(next);
+    if (next.length === len) submit(next);
+  };
+  useEffect(() => {
+    const k = (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') setPin((p) => p.slice(0, -1)); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  });
+  return html`<div class="auth lock">
+    <h1>Finance App</h1>
+    <p class="muted">${st.pin ? 'Inserisci il PIN' : 'Sblocca con la biometria'}</p>
+    ${st.pin && html`<div class="dots" aria-label="PIN">${Array.from({ length: len }, (_, i) => html`<span class=${i < pin.length ? 'on' : ''}></span>`)}</div>`}
+    ${err && html`<p class="err" style="text-align:center">${err}</p>`}
+    ${st.pin && html`<div class="keypad">
+      ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => html`<button type="button" onClick=${() => press(String(d))}>${d}</button>`)}
+      ${bioOk ? html`<button type="button" aria-label="Usa la biometria" onClick=${tryBio}>☝</button>` : html`<span></span>`}
+      <button type="button" onClick=${() => press('0')}>0</button>
+      <button type="button" aria-label="Cancella" onClick=${() => setPin(pin.slice(0, -1))}>⌫</button></div>`}
+    ${!st.pin && bioOk && html`<button class="btn primary" style="width:100%" onClick=${tryBio}>Sblocca</button>`}
+    <p style="text-align:center;margin-top:18px"><a href="#" onClick=${(e) => { e.preventDefault(); onPassword(); }}>Usa la password</a></p></div>`;
 }
 
 /* ---------- app ---------- */
@@ -508,14 +640,16 @@ const TABS = [
   ['home', 'home', 'Home'], ['movimenti', 'list', 'Movimenti'], ['riepilogo', 'chart', 'Riepilogo'], ['conti', 'wallet', 'Conti'],
   ['categorie', 'tag', 'Categorie', 'd'], ['ricorrenti', 'repeat', 'Ricorrenti', 'd'], ['impostazioni', 'gear', 'Impostazioni', 'd'], ['altro', 'more', 'Altro', 'm'],
 ];
+const WIDE = ['home', 'riepilogo'];
 
-function Shell({ version, onLogout }) {
+function Shell({ st, reload, onLogout }) {
   const [route, setRoute] = useState(() => location.hash.slice(2) || 'home');
   const [data, setData] = useState({ accounts: [], categories: [], loaded: false });
   const [tick, setTick] = useState(0);
   const [modal, setModal] = useState(null);
   const [conf, setConf] = useState(null);
   const [msg, setMsg] = useState('');
+  const [hide, setHide] = useState(() => { try { return localStorage.getItem('fa_hide') === '1'; } catch { return false; } });
 
   useEffect(() => {
     const h = () => setRoute(location.hash.slice(2) || 'home');
@@ -532,8 +666,10 @@ function Shell({ version, onLogout }) {
     const cat = new Map(data.categories.map((c) => [c.id, c]));
     const acc = new Map(data.accounts.map((a) => [a.id, a]));
     return {
-      ...data, tick,
+      ...data, tick, hide,
       bump: () => setTick((x) => x + 1),
+      toggleHide: () => setHide((h) => { try { localStorage.setItem('fa_hide', h ? '0' : '1'); } catch { /* ignora */ } return !h; }),
+      bal: (c) => (hide ? '••••••' : money(c)),
       accName: (id) => acc.get(id)?.name || '?',
       catLabel: (id) => { const c = cat.get(id); return !c ? 'Senza categoria' : c.parent_id ? `${cat.get(c.parent_id)?.name} › ${c.name}` : c.name; },
       catColor: (id) => { const c = cat.get(id); const m = c?.parent_id ? cat.get(c.parent_id) : c; return m?.color || 'var(--muted)'; },
@@ -541,7 +677,7 @@ function Shell({ version, onLogout }) {
       openRec: (item) => setModal({ item, rec: true }),
       confirm: (c) => setConf(c),
     };
-  }, [data, tick]);
+  }, [data, tick, hide]);
 
   if (!data.loaded) return null;
   const page = route.split('/')[0];
@@ -549,27 +685,62 @@ function Shell({ version, onLogout }) {
   return html`<div class="shell">
     <nav class="tabs"><div class="brand">Finance App</div>
       ${TABS.map(([r, i, l, only]) => html`<a href=${'#/' + r} class=${(page === r || (r === 'altro' && ['categorie', 'ricorrenti', 'impostazioni'].includes(page)) ? 'on ' : '') + (only === 'd' ? 'd-only' : only === 'm' ? 'm-only' : '')}><${Icon} d=${ICONS[i]} />${l}</a>`)}</nav>
-    <main>${page === 'impostazioni' ? html`<${Impostazioni} ctx=${ctx} version=${version} onLogout=${onLogout} />` : html`<${Page || Home} ctx=${ctx} />`}</main>
+    <main class=${WIDE.includes(page) ? 'wide' : ''}>${page === 'impostazioni' ? html`<${Impostazioni} ctx=${ctx} st=${st} reload=${reload} version=${st.version} onLogout=${onLogout} />` : html`<${Page || Home} ctx=${ctx} />`}</main>
     <button class="fab" aria-label="Nuovo movimento" onClick=${() => ctx.openTx(null)}>+</button>
     ${modal && html`<${FlowModal} ctx=${ctx} item=${modal.item} kind=${modal.kind} rec=${modal.rec} onClose=${() => setModal(null)} />`}
     ${conf && html`<${Confirm} title=${conf.title} text=${conf.text} onClose=${() => setConf(null)} onYes=${async () => { try { await conf.run(); } catch (e) { toast(e.message); } setConf(null); }} />`}
     ${msg && html`<div class="toast">${msg}</div>`}</div>`;
 }
 
+const LOCK_AFTER_MS = 5 * 60 * 1000;
+
 function App() {
   const [st, setSt] = useState(null);
-  const load = () => api('GET', '/status').then(setSt).catch(() => setSt({ error: true }));
+  const [usePassword, setUsePassword] = useState(false);
+  const ref = useRef(null);
+  ref.current = st;
+  const lockable = (s) => !!(s && s.device && (s.pin || s.bio));
+
+  const load = async () => {
+    try {
+      let s = await api('GET', '/status');
+      if (s.auth && lockable(s) && !sessionStorage.getItem('fa_unlocked')) {
+        // avvio a freddo con sblocco rapido attivo: chiede PIN o biometria
+        await api('POST', '/logout');
+        s = await api('GET', '/status');
+      } else if (s.auth && !lockable(s)) {
+        sessionStorage.setItem('fa_unlocked', '1');
+      }
+      setUsePassword(false);
+      setSt(s);
+    } catch { setSt({ error: true }); }
+  };
+
   useEffect(() => {
     load();
     const u = () => setSt((s) => (s ? { ...s, auth: false } : s));
+    let hiddenAt = 0;
+    const v = () => {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS && ref.current?.auth && lockable(ref.current)) {
+        sessionStorage.removeItem('fa_unlocked');
+        load();
+      }
+      hiddenAt = 0;
+    };
     window.addEventListener('fa-unauth', u);
-    return () => window.removeEventListener('fa-unauth', u);
+    document.addEventListener('visibilitychange', v);
+    return () => { window.removeEventListener('fa-unauth', u); document.removeEventListener('visibilitychange', v); };
   }, []);
+
   if (!st) return null;
   if (st.error) return html`<main><p class="err">Impossibile contattare il server.</p></main>`;
   if (!st.setup) return html`<${Auth} setup=${true} onDone=${load} />`;
-  if (!st.auth) return html`<${Auth} onDone=${load} />`;
-  return html`<${Shell} version=${st.version} onLogout=${async () => { await api('POST', '/logout'); load(); }} />`;
+  if (!st.auth) {
+    if (lockable(st) && !usePassword) return html`<${Lock} st=${st} onDone=${load} onPassword=${() => setUsePassword(true)} />`;
+    return html`<${Auth} onDone=${load} onBack=${lockable(st) ? () => setUsePassword(false) : null} />`;
+  }
+  return html`<${Shell} st=${st} reload=${load} onLogout=${async () => { sessionStorage.removeItem('fa_unlocked'); await api('POST', '/logout'); load(); }} />`;
 }
 
 render(html`<${App} />`, document.getElementById('app'));

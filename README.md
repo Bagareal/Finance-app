@@ -15,9 +15,26 @@ Sull'host Proxmox, come root:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Bagareal/Finance-app/main/ct/financeapp.sh)"
 ```
 
-Lo script crea un container LXC Debian 12 (1 core, 256 MB RAM, 2 GB disco; modificabili in modalità
-avanzata), installa l'app come servizio systemd e mostra l'indirizzo, di solito `http://IP:8080`.
-Al primo accesso scegli la password.
+Lo script crea un container LXC Debian 13 (1 core, 256 MB RAM, 2 GB disco; se il tuo Proxmox non ha
+ancora il template Debian 13 usa il 12), installa l'app come servizio systemd e mostra l'indirizzo, di
+solito `http://IP:8080`. Al primo accesso scegli la password.
+
+Le impostazioni avanzate permettono di cambiare ID, hostname, CPU, RAM, disco, storage, bridge, IP e
+gateway, DNS e dominio di ricerca, VLAN, MTU, password di root e SSH.
+
+## Accesso: password, PIN e biometria
+
+Il primo accesso su ogni dispositivo richiede la password. Poi, da *Impostazioni → Sblocco rapido*, puoi
+attivare un PIN (4-6 cifre, unico per tutti i dispositivi) e, se apri l'app in **HTTPS**, l'impronta o il
+Face ID del telefono. Il PIN e la biometria funzionano solo sui dispositivi che hanno già fatto il login con
+la password; dopo 5 PIN sbagliati il dispositivo viene dimenticato e serve di nuovo la password.
+L'app si blocca da sola dopo 5 minuti in background e a ogni riapertura a freddo.
+Cambiare la password revoca tutti i dispositivi e va ripetuta l'attivazione di PIN e biometria.
+
+La biometria (WebAuthn) richiede un contesto sicuro: apri l'app tramite un reverse proxy con HTTPS
+(Nginx Proxy Manager, Caddy…), Tailscale (`tailscale serve`) o un dominio con certificato. Con `http://IP:8080`
+resta disponibile solo il PIN. Il reverse proxy deve passare gli header `Host`, `X-Forwarded-Host` e
+`X-Forwarded-Proto`.
 
 ## Aggiornamento
 

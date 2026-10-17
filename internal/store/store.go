@@ -74,7 +74,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // app per un solo utente: evita problemi di lock
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + devicesSchema); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -113,6 +113,8 @@ func (s *Store) SetSetting(key, value string) error {
 	_, err := s.db.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
 	return err
 }
+
+func (s *Store) DeleteSetting(key string) { s.db.Exec("DELETE FROM settings WHERE key=?", key) }
 
 func (s *Store) CreateSession(token string, expires time.Time) error {
 	s.db.Exec("DELETE FROM sessions WHERE expires < ?", time.Now().Unix())
