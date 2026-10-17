@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Finance App - script per Proxmox VE (da lanciare sull'HOST, come root).
+# Crea un container LXC Debian 13 (ripiego su 12) e installa l'app.
 #
 #   Installa:   bash -c "$(curl -fsSL https://raw.githubusercontent.com/Bagareal/Finance-app/main/ct/financeapp.sh)"
 #   Aggiorna:   bash -c "$(curl -fsSL https://raw.githubusercontent.com/Bagareal/Finance-app/main/ct/financeapp.sh)" -- update [CTID]
@@ -26,6 +27,12 @@ var_ip="${var_ip:-dhcp}"
 var_gateway="${var_gateway:-}"
 var_storage="${var_storage:-}"
 var_template_storage="${var_template_storage:-}"
+var_dns="${var_dns:-}"                 # vuoto = usa quello dell'host
+var_searchdomain="${var_searchdomain:-}"
+var_password="${var_password:-}"       # vuoto = nessuna password di root (si entra con pct enter)
+var_ssh="${var_ssh:-no}"               # yes = installa sshd e permette il login root con password
+var_vlan="${var_vlan:-}"
+var_mtu="${var_mtu:-}"
 
 GN=$'\e[32m'; RD=$'\e[31m'; YW=$'\e[33m'; BL=$'\e[36m'; CL=$'\e[0m'
 msg_info() { echo -e "${YW}»${CL} $*"; }
@@ -91,6 +98,39 @@ ask() { # ask "Domanda" "predefinito" -> stampa la risposta
   echo "${ans:-$2}"
 }
 
+ask_secret() {
+  local ans
+  if command -v whiptail >/dev/null 2>&1 && [[ -t 0 ]]; then
+    ans="$(whiptail --title "$APP" --passwordbox "$1" 9 62 3>&1 1>&2 2>&3)" || exit 1
+  else
+    read -r -s -p "$1: " ans
+    echo >&2
+  fi
+  echo "$ans"
+}
+
+ask_yesno() { # ask_yesno "Domanda" -> yes|no
+  if command -v whiptail >/dev/null 2>&1 && [[ -t 0 ]]; then
+    if whiptail --title "$APP" --yesno "$1" 9 62 --defaultno; then echo yes; else echo no; fi
+  else
+    local a
+    read -r -p "$1 [s/N]: " a
+    [[ "$a" =~ ^[sSyY] ]] && echo yes || echo no
+  fi
+}
+
+choose_storage() { # choose_storage <content> <variabile preferita> -> stampa lo storage scelto
+  local content="$1" pref="$2" list
+  list="$(pvesm status -content "$content" 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')"
+  if [[ -n "$pref" || $(wc -l <<<"$list") -le 1 || ! -t 0 ]] || ! command -v whiptail >/dev/null 2>&1; then
+    echo "$pref"
+    return
+  fi
+  local items=() st
+  while read -r st; do items+=("$st" ""); done <<<"$list"
+  whiptail --title "$APP" --menu "Storage per '$content'" 16 62 6 "${items[@]}" 3>&1 1>&2 2>&3 || exit 1
+}
+
 choose_settings() {
   local mode="default"
   if [[ -t 0 && -z "${var_yes:-}" ]]; then
@@ -114,10 +154,22 @@ choose_settings() {
     if [[ "$var_ip" != "dhcp" ]]; then
       var_gateway="$(ask "Gateway" "${var_gateway:-}")"
     fi
+    var_dns="$(ask "Server DNS (vuoto = quello dell'host)" "${var_dns:-}")"
+    var_searchdomain="$(ask "Dominio di ricerca DNS (vuoto = quello dell'host)" "${var_searchdomain:-}")"
+    var_vlan="$(ask "VLAN tag (vuoto = nessuna)" "${var_vlan:-}")"
+    var_mtu="$(ask "MTU (vuoto = predefinito)" "${var_mtu:-}")"
+    var_storage="$(choose_storage rootdir "$var_storage")"
+    var_password="$(ask_secret "Password di root del container (vuoto = nessuna, si entra con pct enter)")"
+    if [[ -n "$var_password" ]]; then
+      var_ssh="$(ask_yesno "Abilitare SSH con login root tramite password?")"
+    fi
   fi
   [[ "$var_cpu" =~ ^[0-9]+$ && "$var_ram" =~ ^[0-9]+$ && "$var_disk" =~ ^[0-9]+$ ]] || die "CPU, RAM e disco devono essere numeri."
   [[ "$var_hostname" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] || die "Hostname non valido: $var_hostname"
   if [[ "$var_ip" != "dhcp" && -z "$var_gateway" ]]; then die "Con IP statico serve anche il gateway."; fi
+  [[ -z "$var_vlan" || "$var_vlan" =~ ^[0-9]+$ ]] || die "La VLAN deve essere un numero."
+  [[ -z "$var_mtu" || "$var_mtu" =~ ^[0-9]+$ ]] || die "L'MTU deve essere un numero."
+  [[ -z "$var_password" || ${#var_password} -ge 5 ]] || die "La password di root deve avere almeno 5 caratteri."
 }
 
 pick_storage() { # $1 = content (rootdir|vztmpl), $2 = preferenza
@@ -146,11 +198,16 @@ do_install() {
   storage="$(pick_storage rootdir "$var_storage")"
   tstorage="$(pick_storage vztmpl "$var_template_storage")"
 
-  msg_info "Cerco il template Debian 12..."
+  msg_info "Cerco il template Debian 13..."
   pveam update >/dev/null 2>&1 || true
-  local template
-  template="$(pveam available --section system | awk '$2 ~ /^debian-12-standard/ {print $2}' | sort -V | tail -n1)"
-  [[ -n "$template" ]] || die "Template debian-12-standard non trovato."
+  local template available
+  available="$(pveam available --section system | awk '{print $2}')"
+  template="$(grep -E '^debian-13-standard' <<<"$available" | sort -V | tail -n1 || true)"
+  if [[ -z "$template" ]]; then
+    msg_info "Debian 13 non disponibile su questo Proxmox (serve Proxmox VE 9): uso Debian 12."
+    template="$(grep -E '^debian-12-standard' <<<"$available" | sort -V | tail -n1 || true)"
+  fi
+  [[ -n "$template" ]] || die "Nessun template Debian trovato (pveam available)."
   local have
   have="$(pveam list "$tstorage" | awk '{print $1}')"
   if ! grep -q "/$template\$" <<<"$have"; then
@@ -161,12 +218,18 @@ do_install() {
 
   local net="name=eth0,bridge=$var_bridge,ip=$var_ip"
   [[ "$var_ip" != "dhcp" ]] && net+=",gw=$var_gateway"
+  [[ -n "$var_vlan" ]] && net+=",tag=$var_vlan"
+  [[ -n "$var_mtu" ]] && net+=",mtu=$var_mtu"
+  local extra=()
+  [[ -n "$var_dns" ]] && extra+=(--nameserver "$var_dns")
+  [[ -n "$var_searchdomain" ]] && extra+=(--searchdomain "$var_searchdomain")
+  [[ -n "$var_password" ]] && extra+=(--password "$var_password")
 
   msg_info "Creo il container $ctid ($var_hostname: ${var_cpu} CPU, ${var_ram} MB RAM, ${var_disk} GB su $storage)..."
   pct create "$ctid" "$tstorage:vztmpl/$template" \
     --hostname "$var_hostname" --cores "$var_cpu" --memory "$var_ram" --swap 256 \
     --rootfs "$storage:$var_disk" --net0 "$net" \
-    --unprivileged 1 --features nesting=1 --onboot 1 --ostype debian --tags finance >/dev/null
+    --unprivileged 1 --features nesting=1 --onboot 1 --ostype debian --tags finance "${extra[@]}" >/dev/null
   msg_ok "Container creato"
 
   msg_info "Avvio il container..."
@@ -181,6 +244,12 @@ do_install() {
 
   local tz=""
   tz="$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || true)"
+
+  if [[ "$var_ssh" == "yes" && -n "$var_password" ]]; then
+    msg_info "Abilito SSH nel container..."
+    pct exec "$ctid" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server >/dev/null && sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config && systemctl enable --now ssh >/dev/null 2>&1'
+    msg_ok "SSH attivo"
+  fi
 
   msg_info "Installo $APP nel container (può richiedere un minuto)..."
   local script

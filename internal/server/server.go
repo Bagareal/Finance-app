@@ -2,14 +2,11 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,16 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/Bagareal/Finance-app/internal/store"
 )
 
 const (
 	cookieName   = "fa_session"
-	sessionTTL   = 30 * 24 * time.Hour
 	maxBodyBytes = 8 << 20
-	minPassword  = 6
 )
 
 type Server struct {
@@ -36,10 +29,11 @@ type Server struct {
 
 	failMu   sync.Mutex
 	failures map[string]int
+	chal     challenges
 }
 
 func New(st *store.Store, web fs.FS, version string) http.Handler {
-	s := &Server{st: st, version: version, mux: http.NewServeMux(), failures: map[string]int{}}
+	s := &Server{st: st, version: version, mux: http.NewServeMux(), failures: map[string]int{}, chal: challenges{m: map[string]time.Time{}}}
 	s.routes(web)
 	return s.mux
 }
@@ -129,119 +123,13 @@ func (s *Server) protect(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) startSession(w http.ResponseWriter) error {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return err
-	}
-	token := hex.EncodeToString(b)
-	exp := time.Now().Add(sessionTTL)
-	if err := s.st.CreateSession(token, exp); err != nil {
-		return err
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", Expires: exp, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	return nil
-}
-
-func hashPassword(p string) (string, error) {
-	if len(p) < minPassword {
-		return "", badRequest("la password deve avere almeno 6 caratteri")
-	}
-	h, err := bcrypt.GenerateFromPassword([]byte(p), bcrypt.DefaultCost)
-	return string(h), err
-}
-
-func (s *Server) status(w http.ResponseWriter, r *http.Request) (any, error) {
-	_, hasPw := s.st.GetSetting("password_hash")
-	return map[string]any{"setup": hasPw, "auth": s.authed(r), "version": s.version}, nil
-}
-
-func (s *Server) setup(w http.ResponseWriter, r *http.Request) (any, error) {
-	if _, ok := s.st.GetSetting("password_hash"); ok {
-		return nil, httpError{http.StatusConflict, "password già impostata"}
-	}
-	var in struct{ Password string }
-	if err := decode(r, &in); err != nil {
-		return nil, err
-	}
-	h, err := hashPassword(in.Password)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.st.SetSetting("password_hash", h); err != nil {
-		return nil, err
-	}
-	return nil, s.startSession(w)
-}
-
-func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
-	var in struct{ Password string }
-	if err := decode(r, &in); err != nil {
-		return nil, err
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	s.failMu.Lock()
-	fails := s.failures[ip]
-	s.failMu.Unlock()
-	if fails >= 5 {
-		time.Sleep(2 * time.Second) // rallenta i tentativi ripetuti
-	}
-	h, ok := s.st.GetSetting("password_hash")
-	if !ok {
-		return nil, httpError{http.StatusConflict, "password non ancora impostata"}
-	}
-	if bcrypt.CompareHashAndPassword([]byte(h), []byte(in.Password)) != nil {
-		s.failMu.Lock()
-		s.failures[ip]++
-		s.failMu.Unlock()
-		time.Sleep(400 * time.Millisecond)
-		return nil, httpError{http.StatusUnauthorized, "password errata"}
-	}
-	s.failMu.Lock()
-	delete(s.failures, ip)
-	s.failMu.Unlock()
-	return nil, s.startSession(w)
-}
-
-func (s *Server) logout(w http.ResponseWriter, r *http.Request) (any, error) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		s.st.DeleteSession(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
-	return nil, nil
-}
-
-func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) (any, error) {
-	var in struct{ Current, New string }
-	if err := decode(r, &in); err != nil {
-		return nil, err
-	}
-	h, _ := s.st.GetSetting("password_hash")
-	if bcrypt.CompareHashAndPassword([]byte(h), []byte(in.Current)) != nil {
-		return nil, httpError{http.StatusUnauthorized, "password attuale errata"}
-	}
-	nh, err := hashPassword(in.New)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.st.SetSetting("password_hash", nh); err != nil {
-		return nil, err
-	}
-	s.st.DeleteAllSessions()
-	return nil, s.startSession(w)
-}
-
 // --- routes ---
 
 func (s *Server) routes(web fs.FS) {
 	m := s.mux
 	p := func(h handler) http.HandlerFunc { return s.protect(s.api(h)) }
 
-	m.HandleFunc("GET /api/status", s.api(s.status))
-	m.HandleFunc("POST /api/setup", s.api(s.setup))
-	m.HandleFunc("POST /api/login", s.api(s.login))
-	m.HandleFunc("POST /api/logout", s.api(s.logout))
-	m.HandleFunc("POST /api/password", p(s.changePassword))
+	s.authRoutes(p)
 
 	m.HandleFunc("GET /api/accounts", p(func(w http.ResponseWriter, r *http.Request) (any, error) { return s.st.ListAccounts() }))
 	m.HandleFunc("POST /api/accounts", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
