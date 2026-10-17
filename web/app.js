@@ -440,9 +440,14 @@ function Accounts({ ctx }) {
   const [edit, setEdit] = useState(null);
   const live = ctx.accounts.filter((a) => !a.archived), old = ctx.accounts.filter((a) => a.archived);
   const total = live.reduce((s, a) => s + a.balance_cents, 0);
-  const rows = (l) => l.map((a) => html`<div class="row click" onClick=${() => setEdit(a)}>
+  const remove = (a) => ctx.confirm({
+    title: t('Delete “{name}”?', { name: a.name }), text: t('Only an account without transactions can be deleted; otherwise archive it.'),
+    run: async () => { await api('DELETE', `/accounts/${a.id}`); ctx.bump(); },
+  });
+  const rows = (l) => l.map((a) => html`<div class="row">
     <div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${t(ACC_TYPES[a.type] || a.type)}</div></div>
-    <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b></div>`);
+    <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b>
+    <${RowActions} onEdit=${() => setEdit(a)} onDelete=${() => remove(a)} /></div>`);
   return html`<div>
     <div class="head"><h1>${t('Accounts')}</h1><div style="display:flex;gap:8px">
       <button class="btn" onClick=${() => ctx.openTx(null, 'transfer')} disabled=${live.length < 2}>${t('Transfer')}</button>
