@@ -43,20 +43,20 @@ func (s *Store) getCategory(id int64) (*Category, error) {
 func (s *Store) CreateCategory(c *Category) error {
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
-		return invalid("il nome della categoria è obbligatorio")
+		return invalid("category name is required")
 	}
 	if c.ParentID != nil {
 		p, err := s.getCategory(*c.ParentID)
 		if err != nil {
-			return invalid("categoria principale inesistente")
+			return invalid("parent category does not exist")
 		}
 		if p.ParentID != nil {
-			return invalid("sono ammessi solo due livelli (categoria e sottocategoria)")
+			return invalid("only two levels are allowed (category and subcategory)")
 		}
 		c.Kind = p.Kind // la sottocategoria eredita il tipo
 	}
 	if c.Kind != "income" && c.Kind != "expense" {
-		return invalid("tipo categoria non valido")
+		return invalid("invalid category type")
 	}
 	res, err := s.db.Exec("INSERT INTO categories(parent_id,name,kind,color) VALUES(?,?,?,?)", c.ParentID, c.Name, c.Kind, c.Color)
 	if err != nil {
@@ -69,7 +69,7 @@ func (s *Store) CreateCategory(c *Category) error {
 func (s *Store) UpdateCategory(c *Category) error {
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
-		return invalid("il nome della categoria è obbligatorio")
+		return invalid("category name is required")
 	}
 	res, err := s.db.Exec("UPDATE categories SET name=?, color=? WHERE id=?", c.Name, c.Color, c.ID)
 	if err != nil {
@@ -114,19 +114,19 @@ func (s *Store) DeleteCategory(id int64, moveTo *int64) error {
 
 	if used > 0 {
 		if moveTo == nil {
-			return invalid("la categoria ha movimenti: scegli dove spostarli")
+			return invalid("the category has transactions: choose where to move them")
 		}
 		for _, v := range ids {
 			if v == *moveTo {
-				return invalid("la categoria di destinazione non può essere quella eliminata")
+				return invalid("the destination category cannot be the one being deleted")
 			}
 		}
 		dest, err := s.getCategory(*moveTo)
 		if err != nil {
-			return invalid("categoria di destinazione inesistente")
+			return invalid("destination category does not exist")
 		}
 		if dest.Kind != c.Kind {
-			return invalid("la categoria di destinazione deve essere dello stesso tipo")
+			return invalid("the destination category must be of the same type")
 		}
 	}
 

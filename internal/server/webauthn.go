@@ -88,7 +88,7 @@ func expectedOrigin(r *http.Request) string { return "https://" + requestHost(r)
 
 // --- CBOR minimale (solo ciò che serve a WebAuthn) ---
 
-var errCBOR = errors.New("CBOR non valido")
+var errCBOR = errors.New("invalid CBOR")
 
 func cborItem(b []byte, off, depth int) (any, int, error) {
 	if depth > 8 || off >= len(b) {
@@ -193,7 +193,7 @@ type authData struct {
 
 func parseAuthData(b []byte, attested bool) (*authData, error) {
 	if len(b) < 37 {
-		return nil, errors.New("authData troppo corto")
+		return nil, errors.New("authData too short")
 	}
 	a := &authData{flags: b[32], signCount: binary.BigEndian.Uint32(b[33:37])}
 	copy(a.rpIDHash[:], b[:32])
@@ -201,11 +201,11 @@ func parseAuthData(b []byte, attested bool) (*authData, error) {
 		return a, nil
 	}
 	if a.flags&flagAT == 0 || len(b) < 55 {
-		return nil, errors.New("manca la credenziale")
+		return nil, errors.New("missing credential")
 	}
 	idLen := int(binary.BigEndian.Uint16(b[53:55]))
 	if len(b) < 55+idLen {
-		return nil, errors.New("authData troppo corto")
+		return nil, errors.New("authData too short")
 	}
 	a.credID = append([]byte(nil), b[55:55+idLen]...)
 	rest := b[55+idLen:]
@@ -225,7 +225,7 @@ func parseCOSE(raw []byte) (crypto.PublicKey, int, error) {
 	v, _, err := cborItem(raw, 0, 0)
 	m, ok := v.(map[any]any)
 	if err != nil || !ok {
-		return nil, 0, errors.New("chiave COSE non valida")
+		return nil, 0, errors.New("invalid COSE key")
 	}
 	kty, _ := intOf(m[int64(1)])
 	alg, _ := intOf(m[int64(3)])
@@ -235,10 +235,10 @@ func parseCOSE(raw []byte) (crypto.PublicKey, int, error) {
 		x, _ := m[int64(-2)].([]byte)
 		y, _ := m[int64(-3)].([]byte)
 		if crv != 1 || len(x) != 32 || len(y) != 32 {
-			return nil, 0, errors.New("chiave EC non valida")
+			return nil, 0, errors.New("invalid EC key")
 		}
 		if _, err := ecdh.P256().NewPublicKey(append([]byte{4}, append(append([]byte{}, x...), y...)...)); err != nil {
-			return nil, 0, errors.New("punto EC non valido")
+			return nil, 0, errors.New("invalid EC point")
 		}
 		return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}, algES256, nil
 	case alg == algRS256 && kty == 3:
@@ -247,11 +247,11 @@ func parseCOSE(raw []byte) (crypto.PublicKey, int, error) {
 		N := new(big.Int).SetBytes(n)
 		E := new(big.Int).SetBytes(e)
 		if N.BitLen() < 2048 || !E.IsInt64() || E.Int64() < 3 {
-			return nil, 0, errors.New("chiave RSA non valida")
+			return nil, 0, errors.New("invalid RSA key")
 		}
 		return &rsa.PublicKey{N: N, E: int(E.Int64())}, algRS256, nil
 	}
-	return nil, 0, errors.New("algoritmo non supportato")
+	return nil, 0, errors.New("unsupported algorithm")
 }
 
 func verifySig(key crypto.PublicKey, alg int, signed, sig []byte) bool {
@@ -277,13 +277,13 @@ type clientData struct {
 func (s *Server) checkClientData(r *http.Request, raw []byte, typ string) error {
 	var cd clientData
 	if err := json.Unmarshal(raw, &cd); err != nil {
-		return badRequest("dati biometrici non validi")
+		return badRequest("invalid biometric data")
 	}
 	if cd.Type != typ || cd.CrossOrigin || cd.Origin != expectedOrigin(r) {
-		return badRequest("richiesta biometrica non valida per questo indirizzo")
+		return badRequest("biometric request is not valid for this address")
 	}
 	if !s.chal.take(cd.Challenge) {
-		return badRequest("richiesta biometrica scaduta: riprova")
+		return badRequest("biometric request expired: try again")
 	}
 	return nil
 }
@@ -291,10 +291,10 @@ func (s *Server) checkClientData(r *http.Request, raw []byte, typ string) error 
 func checkAuthFlags(a *authData, r *http.Request) error {
 	want := sha256.Sum256([]byte(rpID(r)))
 	if !bytes.Equal(a.rpIDHash[:], want[:]) {
-		return badRequest("dominio non corrispondente")
+		return badRequest("domain mismatch")
 	}
 	if a.flags&flagUP == 0 || a.flags&flagUV == 0 {
-		return badRequest("verifica biometrica non eseguita")
+		return badRequest("biometric verification was not performed")
 	}
 	return nil
 }
@@ -302,7 +302,7 @@ func checkAuthFlags(a *authData, r *http.Request) error {
 func dec(s string) ([]byte, error) {
 	b, err := b64.DecodeString(s)
 	if err != nil {
-		return nil, badRequest("dati biometrici non validi")
+		return nil, badRequest("invalid biometric data")
 	}
 	return b, nil
 }
@@ -311,11 +311,11 @@ func dec(s string) ([]byte, error) {
 
 func (s *Server) bioRegisterBegin(w http.ResponseWriter, r *http.Request) (any, error) {
 	if !isHTTPS(r) {
-		return nil, badRequest("lo sblocco biometrico richiede HTTPS")
+		return nil, badRequest("biometric unlock requires HTTPS")
 	}
 	dev := s.deviceToken(r)
 	if dev == "" {
-		return nil, badRequest("dispositivo non riconosciuto: esci e rientra con la password")
+		return nil, badRequest("device not recognised: sign out and sign in with the password")
 	}
 	exclude := []map[string]string{}
 	for _, c := range s.st.DeviceCredentials(dev) {
@@ -342,7 +342,7 @@ func (s *Server) bioRegisterFinish(w http.ResponseWriter, r *http.Request) (any,
 	}
 	dev := s.deviceToken(r)
 	if dev == "" {
-		return nil, badRequest("dispositivo non riconosciuto")
+		return nil, badRequest("device not recognised")
 	}
 	cdj, err := dec(in.ClientDataJSON)
 	if err != nil {
@@ -359,11 +359,11 @@ func (s *Server) bioRegisterFinish(w http.ResponseWriter, r *http.Request) (any,
 	m, ok := v.(map[any]any)
 	raw, _ := m["authData"].([]byte)
 	if cerr != nil || !ok || raw == nil {
-		return nil, badRequest("attestazione non valida")
+		return nil, badRequest("invalid attestation")
 	}
 	ad, err := parseAuthData(raw, true)
 	if err != nil {
-		return nil, badRequest("attestazione non valida")
+		return nil, badRequest("invalid attestation")
 	}
 	if err := checkAuthFlags(ad, r); err != nil {
 		return nil, err
@@ -374,7 +374,7 @@ func (s *Server) bioRegisterFinish(w http.ResponseWriter, r *http.Request) (any,
 	}
 	err = s.st.AddCredential(store.Credential{ID: b64.EncodeToString(ad.credID), Device: dev, Alg: alg, Key: ad.cose, SignCount: ad.signCount})
 	if err != nil {
-		return nil, badRequest("credenziale già registrata")
+		return nil, badRequest("credential already registered")
 	}
 	return nil, nil
 }
@@ -389,14 +389,14 @@ func (s *Server) bioRemove(w http.ResponseWriter, r *http.Request) (any, error) 
 func (s *Server) bioLoginBegin(w http.ResponseWriter, r *http.Request) (any, error) {
 	dev := s.deviceToken(r)
 	if dev == "" || !isHTTPS(r) {
-		return nil, httpError{http.StatusUnauthorized, "usa la password"}
+		return nil, httpError{http.StatusUnauthorized, "use the password"}
 	}
 	allow := []map[string]string{}
 	for _, c := range s.st.DeviceCredentials(dev) {
 		allow = append(allow, map[string]string{"type": "public-key", "id": c.ID})
 	}
 	if len(allow) == 0 {
-		return nil, httpError{http.StatusUnauthorized, "biometria non attiva su questo dispositivo"}
+		return nil, httpError{http.StatusUnauthorized, "biometric unlock is not enabled on this device"}
 	}
 	return map[string]any{"challenge": s.chal.new(), "rpId": rpID(r), "allowCredentials": allow, "userVerification": "required", "timeout": 60000}, nil
 }
@@ -406,7 +406,7 @@ func (s *Server) bioLoginFinish(w http.ResponseWriter, r *http.Request) (any, er
 	if err := decode(r, &in); err != nil {
 		return nil, err
 	}
-	fail := httpError{http.StatusUnauthorized, "sblocco biometrico non riuscito"}
+	fail := httpError{http.StatusUnauthorized, "biometric unlock failed"}
 	dev := s.deviceToken(r)
 	cred, err := s.st.GetCredential(in.ID)
 	if dev == "" || err != nil || cred.Device != dev {

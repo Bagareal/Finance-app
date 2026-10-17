@@ -10,9 +10,14 @@ import (
 	"strings"
 )
 
-var csvHeader = []string{"data", "tipo", "importo", "conto", "conto_destinazione", "categoria", "sottocategoria", "nota"}
+// Canonical (English) column names, and their Italian equivalents. Import accepts both; export uses the app language.
+var csvColumns = []string{"date", "type", "amount", "account", "destination_account", "category", "subcategory", "note"}
+var csvColumnsIT = []string{"data", "tipo", "importo", "conto", "conto_destinazione", "categoria", "sottocategoria", "nota"}
 
-var kindToIT = map[string]string{"income": "entrata", "expense": "uscita", "transfer": "trasferimento"}
+var kindLabels = map[string]map[string]string{
+	"en": {"income": "income", "expense": "expense", "transfer": "transfer"},
+	"it": {"income": "entrata", "expense": "uscita", "transfer": "trasferimento"},
+}
 
 func FormatCents(c int64) string {
 	sign := ""
@@ -32,13 +37,18 @@ func ParseCents(s string) (int64, error) {
 	s = strings.ReplaceAll(s, ",", ".")
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, invalid("importo non valido: %q", s)
+		return 0, invalid("invalid amount: %q", s)
 	}
 	return int64(math.Round(f * 100)), nil
 }
 
 // ExportCSV scrive tutti i movimenti in CSV (UTF-8, separatore virgola).
-func (s *Store) ExportCSV(w io.Writer) error {
+// ExportCSV writes every transaction as CSV; lang ("en" or "it") picks the column names and type labels.
+func (s *Store) ExportCSV(w io.Writer, lang string) error {
+	header, kinds := csvColumns, kindLabels["en"]
+	if lang == "it" {
+		header, kinds = csvColumnsIT, kindLabels["it"]
+	}
 	accs, err := s.ListAccounts()
 	if err != nil {
 		return err
@@ -60,7 +70,7 @@ func (s *Store) ExportCSV(w io.Writer) error {
 		catByID[c.ID] = c
 	}
 	cw := csv.NewWriter(w)
-	cw.Write(csvHeader)
+	cw.Write(header)
 	for i := len(txs) - 1; i >= 0; i-- { // dal più vecchio
 		t := txs[i]
 		to, cat, sub := "", "", ""
@@ -75,7 +85,7 @@ func (s *Store) ExportCSV(w io.Writer) error {
 				cat = c.Name
 			}
 		}
-		cw.Write([]string{t.Date, kindToIT[t.Kind], FormatCents(t.AmountCents), accName[t.AccountID], to, cat, sub, t.Note})
+		cw.Write([]string{t.Date, kinds[t.Kind], FormatCents(t.AmountCents), accName[t.AccountID], to, cat, sub, t.Note})
 	}
 	cw.Flush()
 	return cw.Error()
@@ -94,18 +104,26 @@ func (s *Store) ImportCSV(data []byte) (int, error) {
 	}
 	records, err := r.ReadAll()
 	if err != nil {
-		return 0, invalid("CSV non valido: %v", err)
+		return 0, invalid("invalid CSV: %v", err)
 	}
 	if len(records) < 2 {
-		return 0, invalid("il CSV non contiene righe")
+		return 0, invalid("the CSV has no rows")
 	}
-	col := map[string]int{}
+	header := map[string]int{}
 	for i, h := range records[0] {
-		col[strings.ToLower(strings.TrimSpace(h))] = i
+		header[strings.ToLower(strings.TrimSpace(h))] = i
 	}
-	for _, need := range []string{"data", "importo", "conto"} {
+	col := map[string]int{} // canonical name -> index, accepting English or Italian headers
+	for i, name := range csvColumns {
+		if idx, ok := header[name]; ok {
+			col[name] = idx
+		} else if idx, ok := header[csvColumnsIT[i]]; ok {
+			col[name] = idx
+		}
+	}
+	for _, need := range []string{"date", "amount", "account"} {
 		if _, ok := col[need]; !ok {
-			return 0, invalid("manca la colonna %q", need)
+			return 0, invalid("missing column %q", need)
 		}
 	}
 	get := func(rec []string, name string) string {
@@ -125,12 +143,12 @@ func (s *Store) ImportCSV(data []byte) (int, error) {
 		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
 			continue
 		}
-		cents, err := ParseCents(get(rec, "importo"))
+		cents, err := ParseCents(get(rec, "amount"))
 		if err != nil {
-			return 0, invalid("riga %d: %v", line, err)
+			return 0, invalid("row %d: %v", line, err)
 		}
 		kind := ""
-		switch strings.ToLower(get(rec, "tipo")) {
+		switch strings.ToLower(get(rec, "type")) {
 		case "entrata", "income":
 			kind = "income"
 		case "uscita", "spesa", "expense":
@@ -143,22 +161,22 @@ func (s *Store) ImportCSV(data []byte) (int, error) {
 				kind = "expense"
 			}
 		default:
-			return 0, invalid("riga %d: tipo sconosciuto %q", line, get(rec, "tipo"))
+			return 0, invalid("row %d: unknown type %q", line, get(rec, "type"))
 		}
 		if cents < 0 {
 			cents = -cents
 		}
-		d := get(rec, "data")
+		d := get(rec, "date")
 		if _, err := parseDate(d); err != nil {
-			return 0, invalid("riga %d: %v", line, err)
+			return 0, invalid("row %d: %v", line, err)
 		}
-		if get(rec, "conto") == "" {
-			return 0, invalid("riga %d: conto mancante", line)
+		if get(rec, "account") == "" {
+			return 0, invalid("row %d: missing account", line)
 		}
-		if kind == "transfer" && get(rec, "conto_destinazione") == "" {
-			return 0, invalid("riga %d: trasferimento senza conto di destinazione", line)
+		if kind == "transfer" && get(rec, "destination_account") == "" {
+			return 0, invalid("row %d: transfer without a destination account", line)
 		}
-		rows = append(rows, row{d, kind, get(rec, "conto"), get(rec, "conto_destinazione"), get(rec, "categoria"), get(rec, "sottocategoria"), get(rec, "nota"), cents})
+		rows = append(rows, row{d, kind, get(rec, "account"), get(rec, "destination_account"), get(rec, "category"), get(rec, "subcategory"), get(rec, "note"), cents})
 	}
 
 	accs, err := s.ListAccounts()
@@ -240,7 +258,7 @@ func (s *Store) ImportCSV(data []byte) (int, error) {
 			return i, err
 		}
 		if err := s.CreateTx(t); err != nil {
-			return i, invalid("riga %d: %v", i+2, err)
+			return i, invalid("row %d: %v", i+2, err)
 		}
 	}
 	return len(rows), nil

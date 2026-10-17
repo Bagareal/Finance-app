@@ -33,6 +33,7 @@ var_password="${var_password:-}"       # vuoto = nessuna password di root (si en
 var_ssh="${var_ssh:-no}"               # yes = installa sshd e permette il login root con password
 var_vlan="${var_vlan:-}"
 var_mtu="${var_mtu:-}"
+var_auto_updates="${var_auto_updates:-yes}"   # automatic Debian security updates (unattended-upgrades)
 
 GN=$'\e[32m'; RD=$'\e[31m'; YW=$'\e[33m'; BL=$'\e[36m'; CL=$'\e[0m'
 msg_info() { echo -e "${YW}»${CL} $*"; }
@@ -82,8 +83,8 @@ do_update() {
   fi
   pct status "$ctid" 2>/dev/null | grep -q running || die "Il container $ctid non esiste o non è avviato."
   pct exec "$ctid" -- test -x /usr/local/bin/update || die "Il container $ctid non sembra un'installazione di $APP."
-  msg_info "Aggiorno $APP nel container $ctid..."
-  pct exec "$ctid" -- /usr/local/bin/update
+  msg_info "Aggiorno $APP e il sistema nel container $ctid..."
+  pct exec "$ctid" -- /usr/local/bin/update "${@:2}"
 }
 
 # ---------------------------------------------------------------- install
@@ -109,13 +110,16 @@ ask_secret() {
   echo "$ans"
 }
 
-ask_yesno() { # ask_yesno "Domanda" -> yes|no
+ask_yesno() { # ask_yesno "Domanda" [yes|no (predefinito, default: no)] -> yes|no
+  local def="${2:-no}"
   if command -v whiptail >/dev/null 2>&1 && [[ -t 0 ]]; then
-    if whiptail --title "$APP" --yesno "$1" 9 62 --defaultno; then echo yes; else echo no; fi
+    local flag=()
+    [[ "$def" == "no" ]] && flag=(--defaultno)
+    if whiptail --title "$APP" --yesno "$1" 9 62 "${flag[@]}"; then echo yes; else echo no; fi
   else
     local a
-    read -r -p "$1 [s/N]: " a
-    [[ "$a" =~ ^[sSyY] ]] && echo yes || echo no
+    if [[ "$def" == "yes" ]]; then read -r -p "$1 [S/n]: " a; [[ ! "$a" =~ ^[nN] ]] && echo yes || echo no
+    else read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^[sSyY] ]] && echo yes || echo no; fi
   fi
 }
 
@@ -159,6 +163,7 @@ choose_settings() {
     var_vlan="$(ask "VLAN tag (vuoto = nessuna)" "${var_vlan:-}")"
     var_mtu="$(ask "MTU (vuoto = predefinito)" "${var_mtu:-}")"
     var_storage="$(choose_storage rootdir "$var_storage")"
+    var_auto_updates="$(ask_yesno "Installare automaticamente gli aggiornamenti di sicurezza di Debian?" yes)"
     var_password="$(ask_secret "Password di root del container (vuoto = nessuna, si entra con pct enter)")"
     if [[ -n "$var_password" ]]; then
       var_ssh="$(ask_yesno "Abilitare SSH con login root tramite password?")"
@@ -254,7 +259,7 @@ do_install() {
   msg_info "Installo $APP nel container (può richiedere un minuto)..."
   local script
   script="$(curl -fsSL "$RAW/install/financeapp-install.sh")" || die "Impossibile scaricare lo script di installazione da $RAW"
-  pct exec "$ctid" -- env FA_REPO="$FA_REPO" FA_BRANCH="$FA_BRANCH" TZ_NAME="$tz" bash -c "$script"
+  pct exec "$ctid" -- env FA_REPO="$FA_REPO" FA_BRANCH="$FA_BRANCH" TZ_NAME="$tz" AUTO_UPDATES="$var_auto_updates" bash -c "$script"
 
   local ip=""
   for i in $(seq 1 15); do

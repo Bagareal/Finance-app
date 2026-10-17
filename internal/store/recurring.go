@@ -22,7 +22,7 @@ type Recurring struct {
 
 func (s *Store) validateRecurring(r *Recurring) error {
 	if r.Freq != "weekly" && r.Freq != "monthly" && r.Freq != "yearly" {
-		return invalid("frequenza non valida")
+		return invalid("invalid frequency")
 	}
 	start, err := parseDate(r.StartDate)
 	if err != nil {
@@ -34,7 +34,7 @@ func (s *Store) validateRecurring(r *Recurring) error {
 			return err
 		}
 		if end.Before(start) {
-			return invalid("la data di fine è precedente all'inizio")
+			return invalid("the end date is before the start date")
 		}
 	}
 	r.Note = strings.TrimSpace(r.Note)

@@ -34,7 +34,7 @@ type Summary struct {
 // I trasferimenti tra conti non contano.
 func (s *Store) Summary(year, month int) (*Summary, error) {
 	if year < 1970 || year > 9999 || month < 0 || month > 12 {
-		return nil, invalid("periodo non valido")
+		return nil, invalid("invalid period")
 	}
 	sum := &Summary{Expenses: []CatTotal{}, Incomes: []CatTotal{}, Months: make([]MonthTotal, 12)}
 	for i := range sum.Months {
@@ -85,7 +85,7 @@ func (s *Store) Summary(year, month int) (*Summary, error) {
 		k := key{kind, macroID}
 		m := macros[k]
 		if m == nil {
-			m = &CatTotal{CategoryID: macroID, Name: "Senza categoria"}
+			m = &CatTotal{CategoryID: macroID, Name: "No category"}
 			if mc, ok := byID[macroID]; ok {
 				m.Name, m.Color = mc.Name, mc.Color
 			}

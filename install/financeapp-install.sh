@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Finance App - installazione DENTRO il container Debian 12.
-# Lanciato da ct/financeapp.sh tramite `pct exec`. Variabili opzionali: FA_REPO, FA_BRANCH, TZ_NAME.
+# Finance App - installazione DENTRO il container Debian.
+# Lanciato da ct/financeapp.sh tramite `pct exec`.
+# Variabili opzionali: FA_REPO, FA_BRANCH, TZ_NAME, AUTO_UPDATES (yes|no).
 set -Eeuo pipefail
 
 FA_REPO="${FA_REPO:-Bagareal/Finance-app}"
 FA_BRANCH="${FA_BRANCH:-main}"
+AUTO_UPDATES="${AUTO_UPDATES:-yes}"
 RAW="https://raw.githubusercontent.com/$FA_REPO/$FA_BRANCH"
 APP_DIR="/opt/financeapp"
 
@@ -42,6 +44,7 @@ fi
 cat >/etc/financeapp.conf <<EOF
 FA_REPO=$FA_REPO
 FA_BRANCH=$FA_BRANCH
+AUTO_UPDATES=$AUTO_UPDATES
 EOF
 
 cat >/etc/systemd/system/financeapp.service <<'EOF'
@@ -74,17 +77,18 @@ cat >/usr/local/bin/update <<'EOF'
 #!/usr/bin/env bash
 [[ -f /etc/financeapp.conf ]] && source /etc/financeapp.conf
 export FA_REPO="${FA_REPO:-Bagareal/Finance-app}"
+export AUTO_UPDATES="${AUTO_UPDATES:-yes}"
 FA_BRANCH="${FA_BRANCH:-main}"
 script="$(curl -fsSL "https://raw.githubusercontent.com/$FA_REPO/$FA_BRANCH/install/financeapp-update.sh")" || { echo "Impossibile scaricare lo script di aggiornamento" >&2; exit 1; }
 exec bash -c "$script" update "$@"
 EOF
 chmod +x /usr/local/bin/update
-# la console di Proxmox (pct enter/exec) ha un PATH senza /usr/local/bin
+# la console di Proxmox (pct enter / pct exec) ha un PATH senza /usr/local/bin
 ln -sf /usr/local/bin/update /usr/bin/update
 ok "Servizio e comando 'update' configurati"
 
 info "Scarico e avvio Finance App..."
 script="$(curl -fsSL "$RAW/install/financeapp-update.sh")"
-FA_REPO="$FA_REPO" bash -c "$script" install
+FA_REPO="$FA_REPO" AUTO_UPDATES="$AUTO_UPDATES" bash -c "$script" install
 
 ok "Installazione completata"

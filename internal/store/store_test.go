@@ -263,12 +263,24 @@ func TestCSVRoundTrip(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := s.ExportCSV(&buf); err != nil {
+	if err := s.ExportCSV(&buf, "en"); err != nil {
 		t.Fatal(err)
 	}
 	s2 := newStore(t)
 	if n, err := s2.ImportCSV(buf.Bytes()); err != nil || n != 4 {
 		t.Fatalf("reimport: %d righe, errore %v\n%s", n, err, buf.String())
+	}
+	if !strings.HasPrefix(buf.String(), "date,type,amount,account,destination_account,") {
+		t.Errorf("intestazione inglese attesa, trovata: %q", strings.SplitN(buf.String(), "\n", 2)[0])
+	}
+	var it bytes.Buffer
+	s.ExportCSV(&it, "it")
+	if !strings.HasPrefix(it.String(), "data,tipo,importo,conto,") || !strings.Contains(it.String(), ",uscita,") {
+		t.Errorf("intestazione/tipi italiani attesi: %q", it.String())
+	}
+	s3 := newStore(t)
+	if n, err := s3.ImportCSV(it.Bytes()); err != nil || n != 4 {
+		t.Fatalf("import del CSV italiano: %d righe, errore %v", n, err)
 	}
 	accs2, _ := s2.ListAccounts()
 	for _, a := range accs2 {

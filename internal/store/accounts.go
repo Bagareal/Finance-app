@@ -16,13 +16,13 @@ var accountTypes = map[string]bool{"corrente": true, "contanti": true, "risparmi
 func (a *Account) normalize() error {
 	a.Name = strings.TrimSpace(a.Name)
 	if a.Name == "" {
-		return invalid("il nome del conto è obbligatorio")
+		return invalid("account name is required")
 	}
 	if a.Type == "" {
 		a.Type = "corrente"
 	}
 	if !accountTypes[a.Type] {
-		return invalid("tipo di conto non valido")
+		return invalid("invalid account type")
 	}
 	return nil
 }
@@ -109,7 +109,7 @@ func (s *Store) DeleteAccount(id int64) error {
 	s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM transactions WHERE account_id=?1 OR to_account_id=?1)
 	  + (SELECT COUNT(*) FROM recurring WHERE account_id=?1 OR to_account_id=?1)`, id).Scan(&n)
 	if n > 0 {
-		return invalid("il conto ha movimenti o ricorrenze: archivialo invece di eliminarlo")
+		return invalid("the account has transactions or recurring items: archive it instead of deleting it")
 	}
 	res, err := s.db.Exec("DELETE FROM accounts WHERE id=?", id)
 	if err != nil {

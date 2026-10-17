@@ -17,7 +17,7 @@ func (e ErrInvalid) Error() string { return string(e) }
 
 func invalid(format string, a ...any) error { return ErrInvalid(fmt.Sprintf(format, a...)) }
 
-var ErrNotFound = errors.New("non trovato")
+var ErrNotFound = errors.New("not found")
 
 type Store struct{ db *sql.DB }
 
@@ -92,7 +92,7 @@ func (s *Store) BackupTo(dest string) error {
 func parseDate(d string) (time.Time, error) {
 	t, err := time.Parse("2006-01-02", d)
 	if err != nil {
-		return t, invalid("data non valida: %q (atteso AAAA-MM-GG)", d)
+		return t, invalid("invalid date: %q (expected YYYY-MM-DD)", d)
 	}
 	return t, nil
 }

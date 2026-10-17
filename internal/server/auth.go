@@ -80,7 +80,7 @@ func hashSecret(secret string) (string, error) {
 
 func hashPassword(p string) (string, error) {
 	if len(p) < minPassword {
-		return "", badRequest("la password deve avere almeno 6 caratteri")
+		return "", badRequest("the password must be at least 6 characters")
 	}
 	return hashSecret(p)
 }
@@ -118,6 +118,7 @@ func (s *Server) authRoutes(p func(handler) http.HandlerFunc) {
 	m.HandleFunc("POST /api/login", s.api(s.login))
 	m.HandleFunc("POST /api/logout", s.api(s.logout))
 	m.HandleFunc("POST /api/password", p(s.changePassword))
+	m.HandleFunc("POST /api/settings", p(s.saveSettings))
 	m.HandleFunc("POST /api/pin/set", p(s.pinSet))
 	m.HandleFunc("POST /api/pin/remove", p(s.pinRemove))
 	m.HandleFunc("POST /api/pin/login", s.api(s.pinLogin))
@@ -126,6 +127,50 @@ func (s *Server) authRoutes(p func(handler) http.HandlerFunc) {
 	m.HandleFunc("POST /api/bio/remove", p(s.bioRemove))
 	m.HandleFunc("POST /api/bio/login/begin", s.api(s.bioLoginBegin))
 	m.HandleFunc("POST /api/bio/login/finish", s.api(s.bioLoginFinish))
+}
+
+var (
+	languages  = map[string]bool{"en": true, "it": true}
+	currencies = map[string]bool{"EUR": true, "USD": true, "AUD": true, "NZD": true, "GBP": true}
+)
+
+// lang e currency sono impostazioni dell'intera app (non del singolo dispositivo).
+func (s *Server) lang() string {
+	if v, _ := s.st.GetSetting("language"); languages[v] {
+		return v
+	}
+	return "en"
+}
+
+func (s *Server) currency() string {
+	if v, _ := s.st.GetSetting("currency"); currencies[v] {
+		return v
+	}
+	return "EUR"
+}
+
+func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) (any, error) {
+	var in struct{ Language, Currency string }
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if in.Language != "" && !languages[in.Language] {
+		return nil, badRequest("unsupported language")
+	}
+	if in.Currency != "" && !currencies[in.Currency] {
+		return nil, badRequest("unsupported currency")
+	}
+	if in.Language != "" {
+		if err := s.st.SetSetting("language", in.Language); err != nil {
+			return nil, err
+		}
+	}
+	if in.Currency != "" {
+		if err := s.st.SetSetting("currency", in.Currency); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]string{"lang": s.lang(), "currency": s.currency()}, nil
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) (any, error) {
@@ -138,7 +183,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) (any, error) {
 		pinLen, _ = strconv.Atoi(v)
 	}
 	return map[string]any{
-		"setup": hasPw, "auth": s.authed(r), "version": s.version,
+		"setup": hasPw, "auth": s.authed(r), "version": s.version, "lang": s.lang(), "currency": s.currency(),
 		"device": dev != "", "pin": hasPin, "pin_len": pinLen,
 		"bio": dev != "" && len(s.st.DeviceCredentials(dev)) > 0,
 	}, nil
@@ -146,7 +191,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) (any, error) {
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) (any, error) {
 	if _, ok := s.st.GetSetting("password_hash"); ok {
-		return nil, httpError{http.StatusConflict, "password già impostata"}
+		return nil, httpError{http.StatusConflict, "password already set"}
 	}
 	var in struct{ Password string }
 	if err := decode(r, &in); err != nil {
@@ -172,12 +217,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 		time.Sleep(2 * time.Second) // rallenta i tentativi ripetuti
 	}
 	if _, ok := s.st.GetSetting("password_hash"); !ok {
-		return nil, httpError{http.StatusConflict, "password non ancora impostata"}
+		return nil, httpError{http.StatusConflict, "password not set yet"}
 	}
 	if !s.checkPassword(in.Password) {
 		s.noteFail(ip, false)
 		time.Sleep(400 * time.Millisecond)
-		return nil, httpError{http.StatusUnauthorized, "password errata"}
+		return nil, httpError{http.StatusUnauthorized, "wrong password"}
 	}
 	s.noteFail(ip, true)
 	return nil, s.startSession(w, r)
@@ -198,7 +243,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) (any, er
 		return nil, err
 	}
 	if !s.checkPassword(in.Current) {
-		return nil, httpError{http.StatusUnauthorized, "password attuale errata"}
+		return nil, httpError{http.StatusUnauthorized, "current password is wrong"}
 	}
 	nh, err := hashPassword(in.New)
 	if err != nil {
@@ -221,10 +266,10 @@ func (s *Server) pinSet(w http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	if !s.checkPassword(in.Password) {
-		return nil, httpError{http.StatusForbidden, "password errata"}
+		return nil, httpError{http.StatusForbidden, "wrong password"}
 	}
 	if !pinRe.MatchString(in.Pin) {
-		return nil, badRequest("il PIN deve avere da 4 a 6 cifre")
+		return nil, badRequest("the PIN must have 4 to 6 digits")
 	}
 	h, err := hashSecret(in.Pin)
 	if err != nil {
@@ -242,7 +287,7 @@ func (s *Server) pinRemove(w http.ResponseWriter, r *http.Request) (any, error) 
 		return nil, err
 	}
 	if !s.checkPassword(in.Password) {
-		return nil, httpError{http.StatusForbidden, "password errata"}
+		return nil, httpError{http.StatusForbidden, "wrong password"}
 	}
 	s.st.DeleteSetting("pin_hash")
 	s.st.DeleteSetting("pin_len")
@@ -257,16 +302,16 @@ func (s *Server) pinLogin(w http.ResponseWriter, r *http.Request) (any, error) {
 	dev := s.deviceToken(r)
 	h, ok := s.st.GetSetting("pin_hash")
 	if dev == "" || !ok {
-		return nil, httpError{http.StatusUnauthorized, "usa la password"}
+		return nil, httpError{http.StatusUnauthorized, "use the password"}
 	}
 	if bcrypt.CompareHashAndPassword([]byte(h), []byte(in.Pin)) != nil {
 		time.Sleep(400 * time.Millisecond)
 		if s.st.DeviceFail(dev) >= maxPinFails {
 			s.st.DeleteDevice(dev) // troppi errori: serve di nuovo la password
 			s.setCookie(w, r, deviceCookie, "", 0)
-			return nil, httpError{http.StatusUnauthorized, "troppi tentativi: accedi con la password"}
+			return nil, httpError{http.StatusUnauthorized, "too many attempts: sign in with the password"}
 		}
-		return nil, httpError{http.StatusUnauthorized, "PIN errato"}
+		return nil, httpError{http.StatusUnauthorized, "wrong PIN"}
 	}
 	s.st.DeviceReset(dev)
 	return nil, s.startSession(w, r)
