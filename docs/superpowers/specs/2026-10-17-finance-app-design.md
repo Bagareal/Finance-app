@@ -28,7 +28,7 @@ Fuori scopo (YAGNI): multi-utente, multi-valuta, budget, riconciliazione bancari
 - Frontend: Preact + htm caricati come file locali, nessun build step, nessun npm.
 - DB: SQLite (`modernc.org/sqlite`, senza CGO), file in `/opt/financeapp/data/finance.db`.
 - Importi in centesimi (interi). Il saldo dei conti si calcola dai movimenti, non è salvato.
-- Un trasferimento = due righe collegate (uscita dal conto A, entrata sul conto B) marcate come trasferimento.
+- Un trasferimento = una sola riga con conto di origine e di destinazione: toglie dal saldo A e aggiunge a B, e non conta come spesa né entrata.
 - Sessione: cookie HttpOnly, SameSite=Lax; password con hash bcrypt/argon2.
 - Mobile first: barra in basso e pulsante "+" su telefono, barra laterale su desktop; tema chiaro/scuro.
 - Porta 8080, configurabile con variabile d'ambiente.
@@ -39,10 +39,12 @@ Home (mese corrente + saldi + ultimi movimenti), Movimenti, Riepilogo, Conti, Ca
 ## Distribuzione e installazione
 - `.github/workflows/release.yml`: al push di un tag `v*` compila `financeapp-linux-amd64` e `financeapp-linux-arm64`
   e li pubblica nella release GitHub di Bagareal/Finance-app.
-- `ct/financeapp.sh`: gira sull'host Proxmox. Usa `build.func` di community-scripts per creare l'LXC
-  (Debian 12, non privilegiato, 1 core, 256 MB RAM, 2 GB disco di default). Contiene anche la funzione `update_script`.
-- `install/financeapp-install.sh`: gira nel container. Scarica l'ultimo binario dalla release,
-  crea `/opt/financeapp`, l'utente di servizio e `financeapp.service` (systemd), salva la versione in `/opt/financeapp/version`.
+- `ct/financeapp.sh`: gira sull'host Proxmox. Non usa `build.func` (scarica l'installer da un URL fisso del repo
+  community-scripts): crea l'LXC con `pveam`/`pct` (Debian 12, non privilegiato, 1 core, 256 MB RAM, 2 GB disco
+  di default; modalità avanzata con whiptail). Con l'argomento `update` aggiorna un container esistente.
+- `install/financeapp-install.sh`: gira nel container. Crea utente, cartelle, `financeapp.service` e il comando `update`,
+  poi lancia `install/financeapp-update.sh`, che scarica il binario dall'ultima release, verifica sha256, avvia il servizio
+  e salva la versione in `/opt/financeapp/version`.
 - Comando di update: dentro il container, `update` (rimanda a `update_script`) confronta la versione installata con
   l'ultima release, ferma il servizio, copia un backup del DB, sostituisce il binario, riavvia.
   Dal host Proxmox si può rilanciare `ct/financeapp.sh` scegliendo update.
@@ -58,7 +60,8 @@ Home (mese corrente + saldi + ultimi movimenti), Movimenti, Riepilogo, Conti, Ca
 ## Struttura repo
 ```
 cmd/financeapp/main.go
-internal/{db,api,auth,recurring,csvio}/
+internal/store/   (schema, logica, test)
+internal/server/  (API, auth, statici)
 web/            (index.html, app.js, style.css, manifest, sw.js — incorporati)
 ct/financeapp.sh
 install/financeapp-install.sh
