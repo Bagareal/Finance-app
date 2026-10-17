@@ -70,7 +70,7 @@ func (s *Server) api(h handler) http.HandlerFunc {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
-	code, msg := http.StatusInternalServerError, "errore interno"
+	code, msg := http.StatusInternalServerError, "internal error"
 	var he httpError
 	var inv store.ErrInvalid
 	switch {
@@ -79,7 +79,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.As(err, &inv):
 		code, msg = http.StatusBadRequest, inv.Error()
 	case errors.Is(err, store.ErrNotFound):
-		code, msg = http.StatusNotFound, "non trovato"
+		code, msg = http.StatusNotFound, "not found"
 	default:
 		log.Printf("errore: %v", err)
 	}
@@ -90,7 +90,7 @@ func writeErr(w http.ResponseWriter, err error) {
 
 func decode(r *http.Request, v any) error {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		return badRequest("richiesta non valida")
+		return badRequest("invalid request")
 	}
 	return nil
 }
@@ -98,7 +98,7 @@ func decode(r *http.Request, v any) error {
 func pathID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
-		return 0, badRequest("id non valido")
+		return 0, badRequest("invalid id")
 	}
 	return id, nil
 }
@@ -118,7 +118,7 @@ func (s *Server) authed(r *http.Request) bool {
 func (s *Server) protect(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.authed(r) {
-			writeErr(w, httpError{http.StatusUnauthorized, "accesso richiesto"})
+			writeErr(w, httpError{http.StatusUnauthorized, "sign-in required"})
 			return
 		}
 		h(w, r)
@@ -236,7 +236,7 @@ func (s *Server) routes(web fs.FS) {
 			return nil, err
 		}
 		t.ID = id
-		if err := s.st.UpdateTx(&t); err != nil {
+		if err := s.st.UpdateTxScope(&t, r.URL.Query().Get("scope")); err != nil {
 			return nil, err
 		}
 		return t, nil
@@ -246,7 +246,7 @@ func (s *Server) routes(web fs.FS) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, s.st.DeleteTx(id)
+		return nil, s.st.DeleteTxScope(id, r.URL.Query().Get("scope"))
 	}))
 
 	m.HandleFunc("GET /api/recurring", p(func(w http.ResponseWriter, r *http.Request) (any, error) { return s.st.ListRecurring() }))
@@ -297,14 +297,18 @@ func (s *Server) routes(web fs.FS) {
 	m.HandleFunc("GET /api/export.csv", s.protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="movimenti-`+time.Now().Format("2006-01-02")+`.csv"`)
-		if err := s.st.ExportCSV(w); err != nil {
+		lang := r.URL.Query().Get("lang")
+		if lang != "en" && lang != "it" {
+			lang = s.lang()
+		}
+		if err := s.st.ExportCSV(w, lang); err != nil {
 			log.Printf("export: %v", err)
 		}
 	}))
 	m.HandleFunc("POST /api/import", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
-			return nil, badRequest("file troppo grande")
+			return nil, badRequest("file too large")
 		}
 		n, err := s.st.ImportCSV(data)
 		if err != nil {
@@ -330,7 +334,7 @@ func (s *Server) routes(web fs.FS) {
 	}))
 
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		writeErr(w, httpError{http.StatusNotFound, "non trovato"})
+		writeErr(w, httpError{http.StatusNotFound, "not found"})
 	})
 
 	// L'HTML non va mai in cache e punta agli asset con ?v=<versione>: a ogni release gli URL cambiano,

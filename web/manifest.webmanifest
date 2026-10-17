@@ -1,8 +1,8 @@
 {
   "name": "Finance App",
-  "short_name": "Finanze",
-  "description": "Gestione di conti, spese ed entrate",
-  "lang": "it",
+  "short_name": "Finance",
+  "description": "Personal finance: accounts, income and expenses",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

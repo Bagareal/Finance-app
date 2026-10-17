@@ -17,22 +17,22 @@ type Tx struct {
 // validateFlow controlla coerenza di tipo, importo, conti e categoria (usa s.db: da chiamare fuori da transazioni).
 func (s *Store) validateFlow(kind string, amount, account int64, to, category **int64) error {
 	if amount <= 0 {
-		return invalid("l'importo deve essere maggiore di zero")
+		return invalid("amount must be greater than zero")
 	}
 	var n int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM accounts WHERE id=?", account).Scan(&n); err != nil || n == 0 {
-		return invalid("conto inesistente")
+		return invalid("account does not exist")
 	}
 	switch kind {
 	case "transfer":
 		if *to == nil {
-			return invalid("scegli il conto di destinazione")
+			return invalid("choose the destination account")
 		}
 		if **to == account {
-			return invalid("il conto di destinazione deve essere diverso da quello di origine")
+			return invalid("the destination account must differ from the source account")
 		}
 		if err := s.db.QueryRow("SELECT COUNT(*) FROM accounts WHERE id=?", **to).Scan(&n); err != nil || n == 0 {
-			return invalid("conto di destinazione inesistente")
+			return invalid("destination account does not exist")
 		}
 		*category = nil // un trasferimento non ha categoria
 	case "income", "expense":
@@ -40,14 +40,14 @@ func (s *Store) validateFlow(kind string, amount, account int64, to, category **
 		if *category != nil {
 			c, err := s.getCategory(**category)
 			if err != nil {
-				return invalid("categoria inesistente")
+				return invalid("category does not exist")
 			}
 			if c.Kind != kind {
-				return invalid("la categoria non è del tipo giusto (entrata/uscita)")
+				return invalid("the category type does not match (income/expense)")
 			}
 		}
 	default:
-		return invalid("tipo di movimento non valido")
+		return invalid("invalid transaction type")
 	}
 	return nil
 }
