@@ -195,3 +195,11 @@ a.btn:visited { color: var(--text); }
 .theme .swatch { height: 54px; border-radius: 8px; position: relative; border: 1px solid var(--line); overflow: hidden; display: block; }
 .swatch i { position: absolute; left: 8px; right: 8px; top: 10px; height: 18px; border-radius: 5px; display: block; }
 .swatch b { position: absolute; left: 8px; bottom: 8px; width: 22px; height: 8px; border-radius: 4px; display: block; }
+
+/* Pro section */
+.stats.two { grid-template-columns: repeat(2, 1fr); }
+.stats.click { cursor: pointer; }
+.pro-amts { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.line-edit { display: grid; grid-template-columns: minmax(0, 1fr) 110px 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.line-edit select, .line-edit input { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); min-height: 42px; width: 100%; font-size: 1rem; }
+.line-edit select:focus, .line-edit input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
