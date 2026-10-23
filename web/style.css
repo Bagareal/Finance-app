@@ -203,3 +203,6 @@ a.btn:visited { color: var(--text); }
 .line-edit { display: grid; grid-template-columns: minmax(0, 1fr) 110px 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .line-edit select, .line-edit input { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); min-height: 42px; width: 100%; font-size: 1rem; }
 .line-edit select:focus, .line-edit input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.pro-bar { flex-wrap: nowrap; }
+.pro-bar .nav-month b { min-width: 104px; }
+.pro-bar .btn { white-space: nowrap; }
