@@ -1,7 +1,8 @@
 # Finance App
 
 A small, fast personal finance app you host yourself. Track accounts, income and expenses, with
-categories, recurring transactions and monthly / yearly summaries. It ships as a single Go binary with an
+categories, recurring transactions and monthly / yearly summaries, plus an optional section to follow the
+earnings of a freelance activity. It ships as a single Go binary with an
 embedded SQLite database (around 15 MB of RAM), works on desktop and mobile, and installs on
 **Proxmox VE** with one command.
 
@@ -27,10 +28,14 @@ currency*). The currency only sets the symbol and number format: nothing is conv
   date. Missed occurrences are created when the server starts. Editing or deleting a transaction that came
   from a recurrence asks whether to change only that one, it and the following ones, or all of them.
 - **Summary**: earned, spent and saved for any month or year, with a chart by category and a monthly trend.
-- **Pro**: a separate section for a freelance or small business activity, independent from accounts and transactions.
-  Create clients and your own deduction categories (tax, contributions, VAT… named as your country needs), then record
-  each payment with its date, client and gross amount, and split it between your categories. The net is computed for you.
-  See gross and net for any month or year; tap a total to see how much went to each category.
+- **Pro**: a separate section (in the side menu, or under *More* on a phone) for a freelance or small business
+  activity. It is independent from accounts and transactions and changes none of their figures.
+  In *Setup* create your clients and your own deduction categories (tax, contributions, VAT… named as your country
+  needs: nothing is built in). Then record each payment with its date, client and gross amount, and split it between
+  your categories. The net is gross minus the split, computed for you, and a payment can be edited or deleted at any
+  time, including past ones. *Month* and *Year* show gross and net; tap a total, a payment or a month to see how much
+  went to each category. Deleting a client or category that has payments only hides it from new payments: the old ones
+  keep its name and totals. Pro data is not part of the CSV export, but it is in the database backup.
 - **Privacy**: a button hides every balance.
 - **Sign-in**: a single password, plus an optional PIN and biometric unlock (see below).
 - **Data**: CSV import and export, and a database backup download.
