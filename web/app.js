@@ -933,8 +933,7 @@ function Pro({ ctx }) {
   }
   const ready = clients.data && cats.data;
   return html`<div>
-    <div class="head"><h1>${t('Pro')}</h1>
-      ${tab !== 'setup' && html`<button class="btn primary" onClick=${() => setPay({ item: null })}>${t('New payment')}</button>`}</div>
+    <div class="head"><h1>${t('Pro')}</h1></div>
     <div class="seg full" style="margin-bottom:14px">
       <button class=${tab === 'month' ? 'on' : ''} onClick=${() => setTab('month')}>${t('Month')}</button>
       <button class=${tab === 'year' ? 'on' : ''} onClick=${() => setTab('year')}>${t('Year')}</button>
@@ -942,7 +941,8 @@ function Pro({ ctx }) {
     ${tab === 'setup' ? html`<div class="cols2">
         <${ProSetup} ctx=${ctx} kind="clients" title=${t('Clients')} empty=${t('No clients yet')} list=${clients.data || []} onChange=${bump} />
         <${ProSetup} ctx=${ctx} kind="categories" title=${t('Deduction categories')} empty=${t('No categories yet. Add the ones you need: tax, contributions…')} list=${cats.data || []} onChange=${bump} /></div>`
-      : html`<div class="head"><${MonthNav} ym=${cur} setYm=${(v) => setYm({ y: v.y, m: v.m || ym.m })} year=${year} /></div>
+      : html`<div class="head pro-bar"><${MonthNav} ym=${cur} setYm=${(v) => setYm({ y: v.y, m: v.m || ym.m })} year=${year} />
+          <button class="btn small primary" onClick=${() => setPay({ item: null })}>${t('New payment')}</button></div>
         <${Status} s=${pays} />
         ${pays.data && html`<${ProTotals} tot=${tot} key=${from} />
           <div class="card"><h2>${year ? t('Months') : t('Payments')}</h2>
