@@ -167,6 +167,34 @@ func (s *Server) routes(web fs.FS) {
 		}
 		return nil, s.st.DeleteAccount(id)
 	}))
+	m.HandleFunc("GET /api/accounts/{id}/values", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		id, err := pathID(r)
+		if err != nil {
+			return nil, err
+		}
+		return s.st.ListValues(id)
+	}))
+	m.HandleFunc("POST /api/accounts/{id}/values", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		id, err := pathID(r)
+		if err != nil {
+			return nil, err
+		}
+		var v store.AccountValue
+		if err := decode(r, &v); err != nil {
+			return nil, err
+		}
+		if err := s.st.SetValue(id, v.Date, v.ValueCents); err != nil {
+			return nil, err
+		}
+		return s.st.GetAccount(id)
+	}))
+	m.HandleFunc("DELETE /api/account-values/{id}", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		id, err := pathID(r)
+		if err != nil {
+			return nil, err
+		}
+		return nil, s.st.DeleteValue(id)
+	}))
 
 	m.HandleFunc("GET /api/categories", p(func(w http.ResponseWriter, r *http.Request) (any, error) { return s.st.ListCategories() }))
 	m.HandleFunc("POST /api/categories", p(func(w http.ResponseWriter, r *http.Request) (any, error) {

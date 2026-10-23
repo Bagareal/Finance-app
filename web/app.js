@@ -28,6 +28,8 @@ const api = async (method, path, body) => {
   return data;
 };
 
+/** The name of an account as shown in lists and pickers: grouped ones read "Group · Name". */
+const accLabel = (a) => (a.group ? a.group + ' · ' + a.name : a.name);
 const sign = (kind, c) => (kind === 'income' ? '+' : kind === 'expense' ? '−' : '') + money(c);
 const todayStr = () => new Date().toLocaleDateString('sv');
 const dayLabel = (d) => new Date(d + 'T00:00').toLocaleDateString(locale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -128,7 +130,9 @@ const Stats = ({ s }) => html`<div class="stats">
 
 const EyeBtn = ({ ctx }) => html`<button class="btn small icon" aria-label=${ctx.hide ? t('Show balances') : t('Hide balances')} title=${ctx.hide ? t('Show balances') : t('Hide balances')} onClick=${ctx.toggleHide}><${Icon} d=${ICONS[ctx.hide ? 'eyeoff' : 'eye']} /></button>`;
 
-const RowActions = ({ onEdit, onDelete }) => html`<span class="row-actions">
+const RowActions = ({ onEdit, onDelete, onValue, reserve }) => html`<span class="row-actions">
+  ${!onValue && reserve && html`<span style="width:36px"></span>`}
+  ${onValue && html`<button class="iconbtn" aria-label=${t('Update value')} title=${t('Update value')} onClick=${onValue}><${Icon} d=${ICONS.chart} /></button>`}
   <button class="iconbtn" aria-label=${t('Edit')} title=${t('Edit')} onClick=${onEdit}><${Icon} d=${ICONS.pencil} /></button>
   <button class="iconbtn danger" aria-label=${t('Delete')} title=${t('Delete')} onClick=${onDelete}><${Icon} d=${ICONS.trash} /></button></span>`;
 
@@ -269,10 +273,10 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
     </div>
     <div class=${f.kind === 'transfer' ? 'two' : ''}>
       <label class="f">${f.kind === 'transfer' ? t('From account') : t('Account')}
-        <select value=${f.account_id} onChange=${set('account_id')}>${accounts.map((a) => html`<option value=${a.id}>${a.name}</option>`)}</select></label>
+        <select value=${f.account_id} onChange=${set('account_id')}>${accounts.map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select></label>
       ${f.kind === 'transfer' && html`<label class="f">${t('To account')}
         <select value=${f.to_account_id} onChange=${set('to_account_id')}><option value="">—</option>
-          ${accounts.filter((a) => String(a.id) !== String(f.account_id)).map((a) => html`<option value=${a.id}>${a.name}</option>`)}</select></label>`}
+          ${accounts.filter((a) => String(a.id) !== String(f.account_id)).map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select></label>`}
     </div>
     ${f.kind !== 'transfer' && html`<label class="f">${t('Category')}
       <select value=${valid ? f.category_id : ''} onChange=${set('category_id')}><option value="">${t('No category')}</option>
@@ -296,11 +300,14 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
 
 function TxRow({ ctx, tx }) {
   const transfer = tx.kind === 'transfer';
-  const title = transfer ? `${ctx.accName(tx.account_id)} → ${ctx.accName(tx.to_account_id)}` : ctx.catLabel(tx.category_id);
+  // grouped accounts read "Group · Name": the title keeps the short names and the full ones go on the second line
+  const grouped = transfer && (ctx.accGroup(tx.account_id) || ctx.accGroup(tx.to_account_id));
+  const title = transfer ? `${ctx.accShort(tx.account_id)} → ${ctx.accShort(tx.to_account_id)}` : ctx.catLabel(tx.category_id);
+  const full = grouped && `${ctx.accName(tx.account_id)} → ${ctx.accName(tx.to_account_id)}`;
   return html`<div class="row">
     <span class="dot" style=${'background:' + (transfer ? 'var(--transfer)' : ctx.catColor(tx.category_id))}></span>
     <div class="grow"><div>${title}${tx.recurring_id && html`<span class="pill">${t('recurring')}</span>`}</div>
-      <div class="muted" style="font-size:.85rem">${[!transfer && ctx.accName(tx.account_id), tx.note].filter(Boolean).join(' · ') || ' '}</div></div>
+      <div class="muted" style="font-size:.85rem">${[!transfer && ctx.accName(tx.account_id), full, tx.note].filter(Boolean).join(' · ') || ' '}</div></div>
     <b class=${'num ' + tx.kind}>${sign(tx.kind, tx.amount_cents)}</b>
     <${RowActions} onEdit=${() => ctx.openTx(tx)} onDelete=${() => ctx.deleteTx(tx)} /></div>`;
 }
@@ -318,13 +325,52 @@ const Fragment = ({ children }) => children;
 
 /* ---------- pages ---------- */
 
+/** Accounts that share a group name collapse into one entry with their total; the others stay single. */
+function groupAccounts(list) {
+  const out = [], byGroup = new Map();
+  for (const a of list) {
+    if (!a.group) { out.push({ single: a }); continue; }
+    const key = a.group.toLowerCase();
+    let g = byGroup.get(key);
+    if (!g) { g = { key, name: a.group, accounts: [], total: 0 }; byGroup.set(key, g); out.push(g); }
+    g.accounts.push(a);
+    g.total += a.balance_cents;
+  }
+  return out;
+}
+
+/** The list of accounts: grouped ones show a single line with the total, which opens to show each account. */
+function AccountRows({ ctx, list, flat, actions }) {
+  const [open, setOpen] = useState(() => { try { return JSON.parse(localStorage.getItem('fa_open') || '{}'); } catch { return {}; } });
+  const toggle = (key) => {
+    const next = { ...open, [key]: !open[key] };
+    setOpen(next);
+    try { localStorage.setItem('fa_open', JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  const info = (a) => (a.manual ? (a.value_date ? t('value of {date}', { date: shortDate(a.value_date) }) : t('value not set yet')) : t(ACC_TYPES[a.type] || a.type));
+  const reserve = !!actions && list.some((a) => a.manual); // keeps the amounts aligned when only some rows have the chart button
+  const amount = (c) => html`<b class=${'num ' + (!ctx.hide && c < 0 ? 'expense' : '')}>${ctx.bal(c)}</b>`;
+  const row = (a, cls, label) => html`<div class=${'row ' + cls}>
+    <div class="grow"><div>${label}</div><div class="muted" style="font-size:.85rem">${info(a)}</div></div>${amount(a.balance_cents)}
+    ${actions && html`<${RowActions} onEdit=${() => actions.edit(a)} onDelete=${() => actions.remove(a)} onValue=${a.manual ? () => actions.value(a) : null} reserve=${reserve} />`}</div>`;
+  if (flat) return list.map((a) => row(a, '', ctx.accName(a.id)));
+  return groupAccounts(list).map((g) => {
+    if (g.single) return row(g.single, '', g.single.name);
+    const n = g.accounts.length;
+    return html`<${Fragment}>
+      <div class="row click" onClick=${() => toggle(g.key)}>
+        <div class="grow"><div>${g.name} ${open[g.key] ? '▾' : '▸'}</div><div class="muted" style="font-size:.85rem">${n === 1 ? t('1 account') : t('{n} accounts', { n })}</div></div>${amount(g.total)}
+        ${actions && html`<span class="row-actions" style=${'width:' + (reserve ? 112 : 74) + 'px'}></span>`}</div>
+      ${open[g.key] && g.accounts.map((a) => row(a, 'acc-sub', a.name))}</${Fragment}>`;
+  });
+}
+
 function AccountsCard({ ctx }) {
   const live = ctx.accounts.filter((a) => !a.archived);
   const total = live.reduce((s, a) => s + a.balance_cents, 0);
   return html`<div class="card"><h2 style="display:flex;align-items:center;gap:8px">${t('Accounts')} <${EyeBtn} ctx=${ctx} />
       <span class="muted num" style="margin-left:auto;font-weight:400">${ctx.bal(total)}</span></h2>
-    ${live.length ? live.map((a) => html`<div class="row"><div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${t(ACC_TYPES[a.type] || a.type)}</div></div>
-      <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b></div>`)
+    ${live.length ? html`<${AccountRows} ctx=${ctx} list=${live} />`
       : html`<div class="empty">${t('No accounts yet.')} <a href="#/accounts">${t('Create one')}</a></div>`}</div>`;
 }
 
@@ -359,7 +405,7 @@ function Transactions({ ctx }) {
     <div class="head"><h1>${t('Transactions')}</h1></div>
     <div class="filters">
       <input type="month" value=${f.month} onInput=${set('month')} aria-label=${t('Month')} />
-      <select value=${f.account} onChange=${set('account')}><option value="">${t('All accounts')}</option>${ctx.accounts.map((a) => html`<option value=${a.id}>${a.name}</option>`)}</select>
+      <select value=${f.account} onChange=${set('account')}><option value="">${t('All accounts')}</option>${ctx.accounts.map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select>
       <select value=${f.category} onChange=${set('category')}><option value="">${t('All categories')}</option>${macros.map((c) => html`<option value=${c.id}>${c.name}</option>`)}</select>
       <select value=${f.kind} onChange=${set('kind')}><option value="">${t('All types')}</option>${Object.entries(KIND).map(([k, v]) => html`<option value=${k}>${t(v)}</option>`)}</select></div>
     <${Status} s=${res} />
@@ -428,13 +474,16 @@ function Summary({ ctx }) {
 }
 
 function AccountModal({ ctx, item, onClose }) {
-  const [f, setF] = useState(item ? { name: item.name, type: item.type, initial: toInput(item.initial_cents), archived: item.archived } : { name: '', type: 'corrente', initial: '', archived: false });
+  const [f, setF] = useState(item
+    ? { name: item.name, type: item.type, initial: toInput(item.initial_cents), archived: item.archived, group: item.group, manual: item.manual }
+    : { name: '', type: 'corrente', initial: '', archived: false, group: item?.group || '', manual: false });
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const groups = [...new Set(ctx.accounts.map((a) => a.group).filter(Boolean))];
   const save = async () => {
     const init = f.initial.trim() === '' ? 0 : parseCents(f.initial);
     if (Number.isNaN(init)) return setErr(t('Invalid opening balance'));
-    const body = { name: f.name, type: f.type, initial_cents: init, archived: f.archived };
+    const body = { name: f.name, type: f.type, initial_cents: init, archived: f.archived, group: f.group, manual: f.manual };
     try { await (item ? api('PUT', `/accounts/${item.id}`, body) : api('POST', '/accounts', body)); ctx.bump(); onClose(); } catch (e) { setErr(e.message); }
   };
   const del = () => ctx.confirm({
@@ -446,32 +495,80 @@ function AccountModal({ ctx, item, onClose }) {
     <div class="two">
       <label class="f">${t('Type')}<select value=${f.type} onChange=${set('type')}>${Object.entries(ACC_TYPES).map(([k, v]) => html`<option value=${k}>${t(v)}</option>`)}</select></label>
       <label class="f">${t('Opening balance ({symbol})', { symbol: currencySymbol() })}<input inputmode="decimal" placeholder=${amountPlaceholder()} value=${f.initial} onInput=${set('initial')} /></label></div>
+    <label class="f">${t('Group (optional)')}<input list="acc-groups" value=${f.group} onInput=${set('group')} placeholder=${t('e.g. a bank or a broker')} /></label>
+    <datalist id="acc-groups">${groups.map((g) => html`<option value=${g}></option>`)}</datalist>
+    <label class="check"><input type="checkbox" checked=${f.manual} onChange=${set('manual')} /> ${t('Value updated by hand (e.g. investments)')}</label>
+    ${f.manual && html`<p class="muted" style="margin:-4px 0 12px;font-size:.85rem">${t('Transfers made after the last update are added to the value.')}</p>`}
     ${item && html`<label class="check"><input type="checkbox" checked=${f.archived} onChange=${set('archived')} /> ${t('Archived (hidden from new transactions)')}</label>`}
     ${err && html`<p class="err">${err}</p>`}
     <div class="actions">${item && html`<button class="btn danger left" onClick=${del}>${t('Delete')}</button>`}
       <button class="btn" onClick=${onClose}>${t('Cancel')}</button><button class="btn primary" onClick=${save}>${t('Save')}</button></div></${Modal}>`;
 }
 
+function Sparkline({ points }) {
+  const W = 300, H = 70, pad = 6;
+  const vals = points.map((p) => p.value_cents);
+  const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+  const x = (i) => pad + (points.length === 1 ? (W - 2 * pad) / 2 : (i * (W - 2 * pad)) / (points.length - 1));
+  const y = (v) => H - pad - ((v - min) / span) * (H - 2 * pad);
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.value_cents).toFixed(1)}`).join(' ');
+  return html`<svg viewBox=${`0 0 ${W} ${H}`} role="img" aria-label=${t('History')} style="width:100%;height:auto;max-height:90px;display:block;margin:4px 0 10px">
+    <path d=${path} fill="none" stroke="var(--primary)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+    ${points.map((p, i) => html`<circle cx=${x(i)} cy=${y(p.value_cents)} r="3" fill="var(--primary)" />`)}</svg>`;
+}
+
+function ValueModal({ ctx, acc, onClose }) {
+  const [n, setN] = useState(0);
+  const hist = useLoad(() => api('GET', `/accounts/${acc.id}/values`), [acc.id, n]);
+  const [date, setDate] = useState(todayStr());
+  const [value, setValue] = useState(toInput(acc.balance_cents));
+  const [err, setErr] = useState('');
+  const save = async () => {
+    const cents = parseCents(value);
+    if (value.trim() === '' || Number.isNaN(cents)) return setErr(t('Invalid value'));
+    try { await api('POST', `/accounts/${acc.id}/values`, { date, value_cents: cents }); ctx.bump(); onClose(); } catch (e) { setErr(e.message); }
+  };
+  const drop = (v) => ctx.confirm({
+    title: t('Delete this value?'), text: t('The balance goes back to the previous value.'),
+    run: async () => { await api('DELETE', `/account-values/${v.id}`); ctx.bump(); setN((x) => x + 1); },
+  });
+  const list = hist.data || [];
+  return html`<${Modal} title=${t('Update value: {name}', { name: ctx.accName(acc.id) })} onClose=${onClose}>
+    <div class="two">
+      <label class="f">${t('Value on')}<input type="date" value=${date} onInput=${(e) => setDate(e.target.value)} /></label>
+      <label class="f">${t('Value ({symbol})', { symbol: currencySymbol() })}<input inputmode="decimal" placeholder=${amountPlaceholder()} value=${value} onInput=${(e) => setValue(e.target.value)} autofocus /></label></div>
+    ${err && html`<p class="err">${err}</p>`}
+    <h3 style="margin:14px 0 4px;font-size:.95rem">${t('History')}</h3>
+    ${list.length > 1 && html`<${Sparkline} points=${[...list].reverse()} />`}
+    ${hist.data && !list.length && html`<div class="empty">${t('No values yet.')}</div>`}
+    <div style="max-height:200px;overflow:auto">${list.map((v) => html`<div class="row">
+      <div class="grow"><div>${new Date(v.date + 'T00:00').toLocaleDateString(locale(), { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+        <div class=${'num ' + (v.change_cents < 0 ? 'expense' : 'income')} style="font-size:.85rem" title=${t('gain/loss')}>${v.change_cents > 0 ? '+' : v.change_cents < 0 ? '−' : ''}${money(Math.abs(v.change_cents))}</div></div>
+      <b class="num">${money(v.value_cents)}</b>
+      <button class="iconbtn danger" aria-label=${t('Delete')} title=${t('Delete')} onClick=${() => drop(v)}><${Icon} d=${ICONS.trash} /></button></div>`)}</div>
+    <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button><button class="btn primary" onClick=${save}>${t('Save')}</button></div></${Modal}>`;
+}
+
 function Accounts({ ctx }) {
   const [edit, setEdit] = useState(null);
+  const [valueFor, setValueFor] = useState(null);
   const live = ctx.accounts.filter((a) => !a.archived), old = ctx.accounts.filter((a) => a.archived);
   const total = live.reduce((s, a) => s + a.balance_cents, 0);
   const remove = (a) => ctx.confirm({
     title: t('Delete “{name}”?', { name: a.name }), text: t('Only an account without transactions can be deleted; otherwise archive it.'),
     run: async () => { await api('DELETE', `/accounts/${a.id}`); ctx.bump(); },
   });
-  const rows = (l) => l.map((a) => html`<div class="row">
-    <div class="grow"><div>${a.name}</div><div class="muted" style="font-size:.85rem">${t(ACC_TYPES[a.type] || a.type)}</div></div>
-    <b class=${'num ' + (!ctx.hide && a.balance_cents < 0 ? 'expense' : '')}>${ctx.bal(a.balance_cents)}</b>
-    <${RowActions} onEdit=${() => setEdit(a)} onDelete=${() => remove(a)} /></div>`);
+  const actions = { edit: setEdit, remove, value: setValueFor };
+  const rows = (l, flat) => html`<${AccountRows} ctx=${ctx} list=${l} flat=${flat} actions=${actions} />`;
   return html`<div>
     <div class="head"><h1>${t('Accounts')}</h1><div style="display:flex;gap:8px">
       <button class="btn" onClick=${() => ctx.openTx(null, 'transfer')} disabled=${live.length < 2}>${t('Transfer')}</button>
       <button class="btn primary" onClick=${() => setEdit({})}>${t('New account')}</button></div></div>
     <div class="card"><h2 style="display:flex;align-items:center;gap:8px">${t('Total')} <${EyeBtn} ctx=${ctx} /><span class="num" style="margin-left:auto">${ctx.bal(total)}</span></h2>
       ${live.length ? rows(live) : html`<div class="empty">${t('Create your first account')}</div>`}</div>
-    ${old.length > 0 && html`<div class="card"><h2 class="muted">${t('Archived')}</h2>${rows(old)}</div>`}
-    ${edit && html`<${AccountModal} ctx=${ctx} item=${edit.id ? edit : null} onClose=${() => setEdit(null)} />`}</div>`;
+    ${old.length > 0 && html`<div class="card"><h2 class="muted">${t('Archived')}</h2>${rows(old, true)}</div>`}
+    ${edit && html`<${AccountModal} ctx=${ctx} item=${edit.id ? edit : null} onClose=${() => setEdit(null)} />`}
+    ${valueFor && html`<${ValueModal} ctx=${ctx} acc=${valueFor} onClose=${() => setValueFor(null)} />`}</div>`;
 }
 
 function CatModal({ ctx, state, onClose }) {
@@ -786,7 +883,9 @@ function Shell({ st, reload, onLogout }) {
       bump: () => setTick((x) => x + 1),
       toggleHide: () => setHide((h) => { try { localStorage.setItem('fa_hide', h ? '0' : '1'); } catch { /* ignore */ } return !h; }),
       bal: (c) => (hide ? '••••••' : money(c)),
-      accName: (id) => acc.get(id)?.name || '?',
+      accName: (id) => (acc.get(id) ? accLabel(acc.get(id)) : '?'),
+      accShort: (id) => acc.get(id)?.name || '?',
+      accGroup: (id) => acc.get(id)?.group || '',
       catLabel: (id) => { const c = cat.get(id); return !c ? t('No category') : c.parent_id ? `${cat.get(c.parent_id)?.name} › ${c.name}` : c.name; },
       catColor: (id) => { const c = cat.get(id); const m = c?.parent_id ? cat.get(c.parent_id) : c; return m?.color || 'var(--muted)'; },
       openTx: (item, kind) => setModal({ item, kind }),
