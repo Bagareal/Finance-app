@@ -119,6 +119,7 @@ const IT = {
   'Create your first account': 'Crea il tuo primo conto',
   'Archived': 'Archiviati',
   'Group (optional)': 'Gruppo (facoltativo)',
+  'Add account to “{name}”': 'Aggiungi un conto a «{name}»',
   'e.g. a bank or a broker': 'es. una banca o un broker',
   'Value updated by hand (e.g. investments)': 'Valore aggiornato a mano (es. investimenti)',
   'Transfers made after the last update are added to the value.': 'I giroconti fatti dopo l’ultimo aggiornamento si sommano al valore.',

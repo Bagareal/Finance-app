@@ -85,6 +85,7 @@ const ICONS = {
   eye: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
   pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z',
   trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
+  plus: 'M12 5v14M5 12h14',
   eyeoff: 'M17.9 17.9A10.9 10.9 0 0112 19c-7 0-11-7-11-7a19 19 0 014.2-5.2M9.9 4.2A10.7 10.7 0 0112 4c7 0 11 7 11 7a19 19 0 01-3.2 4.2M1 1l22 22M14.1 14.1a3 3 0 01-4.2-4.2',
 };
 
@@ -360,7 +361,8 @@ function AccountRows({ ctx, list, flat, actions }) {
     return html`<${Fragment}>
       <div class="row click" onClick=${() => toggle(g.key)}>
         <div class="grow"><div>${g.name} ${open[g.key] ? '▾' : '▸'}</div><div class="muted" style="font-size:.85rem">${n === 1 ? t('1 account') : t('{n} accounts', { n })}</div></div>${amount(g.total)}
-        ${actions && html`<span class="row-actions" style=${'width:' + (reserve ? 112 : 74) + 'px'}></span>`}</div>
+        ${actions && html`<span class="row-actions" style=${'width:' + (reserve ? 112 : 74) + 'px'} onClick=${(e) => e.stopPropagation()}>
+          <button class="iconbtn" aria-label=${t('Add account to “{name}”', { name: g.name })} title=${t('Add account to “{name}”', { name: g.name })} onClick=${() => actions.add(g.name)}><${Icon} d=${ICONS.plus} /></button></span>`}</div>
       ${open[g.key] && g.accounts.map((a) => row(a, 'acc-sub', a.name))}</${Fragment}>`;
   });
 }
@@ -473,10 +475,10 @@ function Summary({ ctx }) {
         <div class="muted" style="font-size:.8rem;text-align:center"><span class="income">■</span> ${t('income')}   <span class="expense">■</span> ${t('spending')}</div></div>`}</div>`;
 }
 
-function AccountModal({ ctx, item, onClose }) {
+function AccountModal({ ctx, item, preset, onClose }) {
   const [f, setF] = useState(item
     ? { name: item.name, type: item.type, initial: toInput(item.initial_cents), archived: item.archived, group: item.group, manual: item.manual }
-    : { name: '', type: 'corrente', initial: '', archived: false, group: item?.group || '', manual: false });
+    : { name: '', type: 'corrente', initial: '', archived: false, group: preset?.group || '', manual: false });
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const groups = [...new Set(ctx.accounts.map((a) => a.group).filter(Boolean))];
@@ -558,7 +560,7 @@ function Accounts({ ctx }) {
     title: t('Delete “{name}”?', { name: a.name }), text: t('Only an account without transactions can be deleted; otherwise archive it.'),
     run: async () => { await api('DELETE', `/accounts/${a.id}`); ctx.bump(); },
   });
-  const actions = { edit: setEdit, remove, value: setValueFor };
+  const actions = { edit: setEdit, remove, value: setValueFor, add: (group) => setEdit({ group }) };
   const rows = (l, flat) => html`<${AccountRows} ctx=${ctx} list=${l} flat=${flat} actions=${actions} />`;
   return html`<div>
     <div class="head"><h1>${t('Accounts')}</h1><div style="display:flex;gap:8px">
@@ -567,7 +569,7 @@ function Accounts({ ctx }) {
     <div class="card"><h2 style="display:flex;align-items:center;gap:8px">${t('Total')} <${EyeBtn} ctx=${ctx} /><span class="num" style="margin-left:auto">${ctx.bal(total)}</span></h2>
       ${live.length ? rows(live) : html`<div class="empty">${t('Create your first account')}</div>`}</div>
     ${old.length > 0 && html`<div class="card"><h2 class="muted">${t('Archived')}</h2>${rows(old, true)}</div>`}
-    ${edit && html`<${AccountModal} ctx=${ctx} item=${edit.id ? edit : null} onClose=${() => setEdit(null)} />`}
+    ${edit && html`<${AccountModal} ctx=${ctx} item=${edit.id ? edit : null} preset=${edit.id ? null : edit} onClose=${() => setEdit(null)} />`}
     ${valueFor && html`<${ValueModal} ctx=${ctx} acc=${valueFor} onClose=${() => setValueFor(null)} />`}</div>`;
 }
 
