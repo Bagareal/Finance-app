@@ -82,6 +82,7 @@ const ICONS = {
   repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3',
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14 3h-4l-.6 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 005 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2L10 21h4l.6-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  briefcase: 'M3 8h18v12H3zM8 8V5a1 1 0 011-1h6a1 1 0 011 1v3M3 13h18',
   eye: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
   pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z',
   trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
@@ -760,8 +761,200 @@ function Settings({ ctx, st, reload, onLogout }) {
     </div></div>`;
 }
 
+/* ---------- Pro (freelance activity) ---------- */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+/** First and last day (as strings) of a month, or of the whole year when m is 0. */
+const proRange = (y, m) => (m ? [`${y}-${pad2(m)}-01`, `${y}-${pad2(m)}-31`] : [`${y}-01-01`, `${y}-12-31`]);
+
+/** Gross, net and the total per category of a list of payments. */
+function proTotals(list) {
+  const cats = new Map();
+  let gross = 0, net = 0;
+  for (const p of list) {
+    gross += p.gross_cents;
+    net += p.net_cents;
+    for (const l of p.lines) {
+      const c = cats.get(l.category_id) || { id: l.category_id, name: l.name, cents: 0 };
+      c.cents += l.amount_cents;
+      cats.set(l.category_id, c);
+    }
+  }
+  return { gross, net, cats: [...cats.values()].sort((a, b) => b.cents - a.cents) };
+}
+
+const CatTotals = ({ cats }) => cats.map((c) => html`<div class="row subrow"><div class="grow"><div>${c.name}</div></div><span class="num">${money(c.cents)}</span></div>`);
+
+/** Gross and net of the period; a click shows how much went to each category. */
+function ProTotals({ tot }) {
+  const [open, setOpen] = useState(false);
+  const can = tot.cats.length > 0;
+  return html`<div class="card">
+    <div class=${'stats two' + (can ? ' click' : '')} style="margin-bottom:6px" onClick=${() => can && setOpen(!open)}>
+      <div class="stat"><small>${t('Gross')}</small><b class="num">${money(tot.gross)}</b></div>
+      <div class="stat"><small>${t('Net')}</small><b class=${'num ' + (tot.net < 0 ? 'expense' : 'income')}>${money(tot.net)}</b></div></div>
+    ${can && html`<div class="row click muted" style="justify-content:center;padding:6px 0" onClick=${() => setOpen(!open)}>${open ? '▾' : '▸'} ${t('By category')}</div>`}
+    ${open && html`<${CatTotals} cats=${tot.cats} />`}</div>`;
+}
+
+function PayRow({ p, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const can = p.lines.length > 0;
+  return html`<${Fragment}>
+    <div class=${'row' + (can ? ' click' : '')} onClick=${() => can && setOpen(!open)}>
+      <div class="grow"><div>${p.client_name}${can ? (open ? ' ▾' : ' ▸') : ''}</div>
+        <div class="muted" style="font-size:.85rem">${[shortDate(p.date), p.note].filter(Boolean).join(' · ')}</div></div>
+      <div class="pro-amts"><b class="num">${money(p.gross_cents)}</b><span class=${'num ' + (p.net_cents < 0 ? 'expense' : 'muted')} style="font-size:.85rem">${t('Net')} ${money(p.net_cents)}</span></div>
+      <span onClick=${(e) => e.stopPropagation()}><${RowActions} onEdit=${onEdit} onDelete=${onDelete} /></span></div>
+    ${open && p.lines.map((l) => html`<div class="row subrow"><div class="grow"><div>${l.name}</div></div><span class="num">${money(l.amount_cents)}</span></div>`)}</${Fragment}>`;
+}
+
+/** One month of the yearly summary: gross and net, opening to the categories. */
+function ProMonthRow({ y, m, list }) {
+  const [open, setOpen] = useState(false);
+  const tot = proTotals(list);
+  const can = tot.cats.length > 0;
+  return html`<${Fragment}>
+    <div class=${'row' + (can ? ' click' : '')} onClick=${() => can && setOpen(!open)}>
+      <div class="grow"><div style="text-transform:capitalize">${new Date(y, m - 1, 1).toLocaleDateString(locale(), { month: 'long' })}${can ? (open ? ' ▾' : ' ▸') : ''}</div></div>
+      <div class="pro-amts"><b class="num">${money(tot.gross)}</b><span class=${'num ' + (tot.net < 0 ? 'expense' : 'muted')} style="font-size:.85rem">${t('Net')} ${money(tot.net)}</span></div></div>
+    ${open && html`<${CatTotals} cats=${tot.cats} />`}</${Fragment}>`;
+}
+
+function PayModal({ item, defaultDate, clients, cats, goSetup, onSaved, onClose }) {
+  const [f, setF] = useState(() => item ? {
+    client_id: item.client_id, date: item.date, gross: toInput(item.gross_cents), note: item.note,
+    lines: item.lines.map((l) => ({ category_id: l.category_id, name: l.name, amount: toInput(l.amount_cents) })),
+  } : { client_id: clients[0]?.id || '', date: defaultDate, gross: '', note: '', lines: [] });
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  // a client or category deleted after this payment was saved is still listed for it
+  const clientOpts = !item || clients.some((c) => c.id === item.client_id) ? clients : [{ id: item.client_id, name: item.client_name }, ...clients];
+  const known = new Map([...cats.map((c) => [c.id, c.name]), ...f.lines.map((l) => [l.category_id, l.name])]);
+  const free = () => [...known].filter(([id]) => !f.lines.some((l) => l.category_id === id));
+  const setLine = (i, patch) => setF({ ...f, lines: f.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
+  const addLine = () => { const [id, name] = free()[0]; setF({ ...f, lines: [...f.lines, { category_id: id, name, amount: '' }] }); };
+  const gross = parseCents(f.gross);
+  const deducted = f.lines.reduce((s, l) => s + (parseCents(l.amount) > 0 ? parseCents(l.amount) : 0), 0);
+  const net = (gross > 0 ? gross : 0) - deducted;
+
+  const save = async () => {
+    if (!f.client_id) return setErr(t('Choose a client'));
+    if (!(gross > 0)) return setErr(t('Enter an amount greater than zero'));
+    const lines = [];
+    for (const l of f.lines) {
+      if (l.amount.trim() === '') continue;
+      const c = parseCents(l.amount);
+      if (!(c > 0)) return setErr(t('Enter an amount greater than zero'));
+      lines.push({ category_id: Number(l.category_id), amount_cents: c });
+    }
+    setBusy(true);
+    const body = { client_id: Number(f.client_id), date: f.date, gross_cents: gross, note: f.note, lines };
+    try { await (item ? api('PUT', `/pro/payments/${item.id}`, body) : api('POST', '/pro/payments', body)); onSaved(); onClose(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  if (!clientOpts.length) {
+    return html`<${Modal} title=${t('New payment')} onClose=${onClose}><p>${t('Create a client first.')}</p>
+      <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button><button class="btn primary" onClick=${() => { onClose(); goSetup(); }}>${t('Go to setup')}</button></div></${Modal}>`;
+  }
+  return html`<${Modal} title=${item ? t('Edit payment') : t('New payment')} onClose=${onClose}>
+    <label class="f">${t('Client')}<select value=${f.client_id} onChange=${set('client_id')}>${clientOpts.map((c) => html`<option value=${c.id}>${c.name}</option>`)}</select></label>
+    <div class="two">
+      <label class="f">${t('Gross amount ({symbol})', { symbol: currencySymbol() })}<input inputmode="decimal" placeholder=${amountPlaceholder()} value=${f.gross} onInput=${set('gross')} autofocus /></label>
+      <label class="f">${t('Date')}<input type="date" value=${f.date} onInput=${set('date')} /></label></div>
+    <label class="f">${t('Note')}<input value=${f.note} onInput=${set('note')} maxlength="200" /></label>
+    <h3 style="margin:6px 0 8px;font-size:.95rem">${t('Split of the amount')}</h3>
+    ${f.lines.map((l, i) => html`<div class="line-edit">
+      <select value=${l.category_id} onChange=${(e) => setLine(i, { category_id: Number(e.target.value), name: known.get(Number(e.target.value)) })}>
+        ${[...known].filter(([id]) => id === l.category_id || !f.lines.some((o) => o.category_id === id)).map(([id, name]) => html`<option value=${id}>${name}</option>`)}</select>
+      <input inputmode="decimal" placeholder=${amountPlaceholder()} value=${l.amount} onInput=${(e) => setLine(i, { amount: e.target.value })} aria-label=${t('Amount ({symbol})', { symbol: currencySymbol() })} />
+      <button type="button" class="iconbtn danger" aria-label=${t('Remove')} title=${t('Remove')} onClick=${() => setF({ ...f, lines: f.lines.filter((_, j) => j !== i) })}><${Icon} d=${ICONS.trash} /></button></div>`)}
+    ${known.size === 0 && html`<p class="muted" style="margin:0 0 8px;font-size:.85rem">${t('Create categories (tax, contributions…) in the setup to split the amount.')} <a href="#" onClick=${(e) => { e.preventDefault(); onClose(); goSetup(); }}>${t('Go to setup')}</a></p>`}
+    ${free().length > 0 && html`<button type="button" class="btn small" onClick=${addLine}>${t('+ Add a line')}</button>`}
+    <div class="row" style="margin-top:10px"><div class="grow">${t('Net')}</div><b class=${'num ' + (net < 0 ? 'expense' : 'income')}>${money(net)}</b></div>
+    ${net < 0 && html`<p class="err">${t('The split is higher than the gross amount.')}</p>`}
+    ${err && html`<p class="err">${err}</p>`}
+    <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button><button class="btn primary" disabled=${busy} onClick=${save}>${t('Save')}</button></div></${Modal}>`;
+}
+
+function NameModal({ kind, item, onSaved, onClose }) {
+  const [name, setName] = useState(item?.name || '');
+  const [err, setErr] = useState('');
+  const save = async () => {
+    try { await (item ? api('PUT', `/pro/${kind}/${item.id}`, { name }) : api('POST', `/pro/${kind}`, { name })); onSaved(); onClose(); }
+    catch (e) { setErr(e.message); }
+  };
+  const title = kind === 'clients' ? (item ? t('Edit client') : t('New client')) : (item ? t('Edit category') : t('New category'));
+  return html`<${Modal} title=${title} onClose=${onClose}>
+    <label class="f">${t('Name')}<input value=${name} onInput=${(e) => setName(e.target.value)} onKeyDown=${(e) => e.key === 'Enter' && save()} maxlength="80" autofocus /></label>
+    ${err && html`<p class="err">${err}</p>`}
+    <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button><button class="btn primary" onClick=${save}>${t('Save')}</button></div></${Modal}>`;
+}
+
+function ProSetup({ ctx, kind, title, empty, list, onChange }) {
+  const [edit, setEdit] = useState(null);
+  const remove = (n) => ctx.confirm({
+    title: t('Delete “{name}”?', { name: n.name }), text: t('Payments already registered keep it.'),
+    run: async () => { await api('DELETE', `/pro/${kind}/${n.id}`); onChange(); },
+  });
+  return html`<div class="card"><h2>${title}</h2>
+    ${list.length ? list.map((n) => html`<div class="row"><div class="grow"><div>${n.name}</div></div><${RowActions} onEdit=${() => setEdit(n)} onDelete=${() => remove(n)} /></div>`)
+      : html`<div class="empty">${empty}</div>`}
+    <div style="padding-top:10px"><button class="btn primary" onClick=${() => setEdit({})}>${kind === 'clients' ? t('New client') : t('New category')}</button></div>
+    ${edit && html`<${NameModal} kind=${kind} item=${edit.id ? edit : null} onSaved=${onChange} onClose=${() => setEdit(null)} />`}</div>`;
+}
+
+function Pro({ ctx }) {
+  const now = new Date();
+  const [tab, setTab] = useState('month');
+  const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
+  const [n, setN] = useState(0);
+  const [pay, setPay] = useState(null); // { item } while the payment form is open
+  const bump = () => setN((x) => x + 1);
+  const clients = useLoad(() => api('GET', '/pro/clients'), [n]);
+  const cats = useLoad(() => api('GET', '/pro/categories'), [n]);
+  const year = tab === 'year';
+  const cur = year ? { y: ym.y, m: 0 } : ym;
+  const [from, to] = proRange(cur.y, cur.m);
+  const pays = useLoad(() => api('GET', `/pro/payments?from=${from}&to=${to}`), [from, to, n]);
+  const list = pays.data || [];
+  const tot = proTotals(list);
+  const inMonth = ym.y === now.getFullYear() && ym.m === now.getMonth() + 1;
+  const removePay = (p) => ctx.confirm({
+    title: t('Delete the payment?'), text: t('This cannot be undone.'),
+    run: async () => { await api('DELETE', `/pro/payments/${p.id}`); bump(); },
+  });
+  const byMonth = [];
+  for (let m = 12; m >= 1; m--) {
+    const l = list.filter((p) => Number(p.date.slice(5, 7)) === m);
+    if (l.length) byMonth.push([m, l]);
+  }
+  const ready = clients.data && cats.data;
+  return html`<div>
+    <div class="head"><h1>${t('Pro')}</h1>
+      ${tab !== 'setup' && html`<button class="btn primary" onClick=${() => setPay({ item: null })}>${t('New payment')}</button>`}</div>
+    <div class="seg full" style="margin-bottom:14px">
+      <button class=${tab === 'month' ? 'on' : ''} onClick=${() => setTab('month')}>${t('Month')}</button>
+      <button class=${tab === 'year' ? 'on' : ''} onClick=${() => setTab('year')}>${t('Year')}</button>
+      <button class=${tab === 'setup' ? 'on' : ''} onClick=${() => setTab('setup')}>${t('Setup')}</button></div>
+    ${tab === 'setup' ? html`<div class="cols2">
+        <${ProSetup} ctx=${ctx} kind="clients" title=${t('Clients')} empty=${t('No clients yet')} list=${clients.data || []} onChange=${bump} />
+        <${ProSetup} ctx=${ctx} kind="categories" title=${t('Deduction categories')} empty=${t('No categories yet. Add the ones you need: tax, contributions…')} list=${cats.data || []} onChange=${bump} /></div>`
+      : html`<div class="head"><${MonthNav} ym=${cur} setYm=${(v) => setYm({ y: v.y, m: v.m || ym.m })} year=${year} /></div>
+        <${Status} s=${pays} />
+        ${pays.data && html`<${ProTotals} tot=${tot} key=${from} />
+          <div class="card"><h2>${year ? t('Months') : t('Payments')}</h2>
+            ${!list.length ? html`<div class="empty">${t('No payments')}</div>`
+              : year ? byMonth.map(([m, l]) => html`<${ProMonthRow} y=${cur.y} m=${m} list=${l} key=${cur.y + '-' + m} />`)
+              : list.map((p) => html`<${PayRow} p=${p} key=${p.id} onEdit=${() => setPay({ item: p })} onDelete=${() => removePay(p)} />`)}</div>`}`}
+    ${pay && ready && html`<${PayModal} item=${pay.item} defaultDate=${inMonth ? todayStr() : `${ym.y}-${pad2(ym.m)}-01`} clients=${clients.data} cats=${cats.data}
+      goSetup=${() => setTab('setup')} onSaved=${bump} onClose=${() => setPay(null)} />`}</div>`;
+}
+
 function More() {
-  const items = [['categories', 'tag', 'Categories'], ['recurring', 'repeat', 'Recurring'], ['settings', 'gear', 'Settings']];
+  const items = [['pro', 'briefcase', 'Pro'], ['categories', 'tag', 'Categories'], ['recurring', 'repeat', 'Recurring'], ['settings', 'gear', 'Settings']];
   return html`<div><div class="head"><h1>${t('More')}</h1></div><div class="card">
     ${items.map(([r, i, l]) => html`<a class="row" href=${'#/' + r} style="text-decoration:none;color:inherit"><${Icon} d=${ICONS[i]} /><div class="grow">${t(l)}</div><span class="muted">›</span></a>`)}</div></div>`;
 }
@@ -835,9 +1028,9 @@ function Lock({ st, onDone, onPassword }) {
 
 const TABS = [
   ['home', 'home', 'Home'], ['transactions', 'list', 'Transactions'], ['summary', 'chart', 'Summary'], ['accounts', 'wallet', 'Accounts'],
-  ['categories', 'tag', 'Categories', 'd'], ['recurring', 'repeat', 'Recurring', 'd'], ['settings', 'gear', 'Settings', 'd'], ['more', 'more', 'More', 'm'],
+  ['pro', 'briefcase', 'Pro', 'd'], ['categories', 'tag', 'Categories', 'd'], ['recurring', 'repeat', 'Recurring', 'd'], ['settings', 'gear', 'Settings', 'd'], ['more', 'more', 'More', 'm'],
 ];
-const PAGES = { home: Home, transactions: Transactions, summary: Summary, accounts: Accounts, categories: Categories, recurring: Recurring, more: More };
+const PAGES = { home: Home, transactions: Transactions, summary: Summary, accounts: Accounts, categories: Categories, recurring: Recurring, pro: Pro, more: More };
 const WIDE = ['home', 'summary'];
 // addresses used by the first versions (Italian), still open in browsers and PWAs after an update
 const LEGACY_ROUTES = { movimenti: 'transactions', riepilogo: 'summary', conti: 'accounts', categorie: 'categories', ricorrenti: 'recurring', impostazioni: 'settings', altro: 'more' };
@@ -909,9 +1102,9 @@ function Shell({ st, reload, onLogout }) {
   const Page = PAGES[page] || Home;
   return html`<div class="shell">
     <nav class="tabs"><div class="brand">Finance App</div>
-      ${TABS.map(([r, i, l, only]) => html`<a href=${'#/' + r} class=${(page === r || (r === 'more' && ['categories', 'recurring', 'settings'].includes(page)) ? 'on ' : '') + (only === 'd' ? 'd-only' : only === 'm' ? 'm-only' : '')}><${Icon} d=${ICONS[i]} />${t(l)}</a>`)}</nav>
+      ${TABS.map(([r, i, l, only]) => html`<a href=${'#/' + r} class=${(page === r || (r === 'more' && ['pro', 'categories', 'recurring', 'settings'].includes(page)) ? 'on ' : '') + (only === 'd' ? 'd-only' : only === 'm' ? 'm-only' : '')}><${Icon} d=${ICONS[i]} />${t(l)}</a>`)}</nav>
     <main class=${WIDE.includes(page) ? 'wide' : ''}>${page === 'settings' ? html`<${Settings} ctx=${ctx} st=${st} reload=${reload} onLogout=${onLogout} />` : html`<${Page} ctx=${ctx} />`}</main>
-    <button class="fab" aria-label=${t('New transaction')} onClick=${() => ctx.openTx(null)}>+</button>
+    ${page !== 'pro' && html`<button class="fab" aria-label=${t('New transaction')} onClick=${() => ctx.openTx(null)}>+</button>`}
     ${modal && html`<${FlowModal} ctx=${ctx} item=${modal.item} kind=${modal.kind} rec=${modal.rec} onClose=${() => setModal(null)} />`}
     ${conf && html`<${Confirm} title=${conf.title} text=${conf.text} onClose=${() => setConf(null)} onYes=${async () => { try { await conf.run(); } catch (e) { toast(e.message); } setConf(null); }} />`}
     ${delScope && html`<${ScopeModal} type="del" onClose=${() => setDelScope(null)}

@@ -27,6 +27,10 @@ currency*). The currency only sets the symbol and number format: nothing is conv
   date. Missed occurrences are created when the server starts. Editing or deleting a transaction that came
   from a recurrence asks whether to change only that one, it and the following ones, or all of them.
 - **Summary**: earned, spent and saved for any month or year, with a chart by category and a monthly trend.
+- **Pro**: a separate section for a freelance or small business activity, independent from accounts and transactions.
+  Create clients and your own deduction categories (tax, contributions, VAT… named as your country needs), then record
+  each payment with its date, client and gross amount, and split it between your categories. The net is computed for you.
+  See gross and net for any month or year; tap a total to see how much went to each category.
 - **Privacy**: a button hides every balance.
 - **Sign-in**: a single password, plus an optional PIN and biometric unlock (see below).
 - **Data**: CSV import and export, and a database backup download.

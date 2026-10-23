@@ -81,7 +81,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // app per un solo utente: evita problemi di lock
-	if _, err := db.Exec(schema + devicesSchema); err != nil {
+	if _, err := db.Exec(schema + devicesSchema + proSchema); err != nil {
 		db.Close()
 		return nil, err
 	}

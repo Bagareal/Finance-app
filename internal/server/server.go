@@ -314,6 +314,8 @@ func (s *Server) routes(web fs.FS) {
 		return nil, s.st.DeleteRecurring(id)
 	}))
 
+	s.proRoutes(p)
+
 	m.HandleFunc("GET /api/summary", p(func(w http.ResponseWriter, r *http.Request) (any, error) {
 		year := int(intParam(r, "year"))
 		if year == 0 {
