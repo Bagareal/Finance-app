@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS transactions (
   note TEXT NOT NULL DEFAULT '',
   recurring_id INTEGER
 );
+CREATE TABLE IF NOT EXISTS account_values (
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  value_cents INTEGER NOT NULL,
+  UNIQUE (account_id, date)
+);
 CREATE INDEX IF NOT EXISTS tx_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS tx_account ON transactions(account_id);
 CREATE TABLE IF NOT EXISTS recurring (
@@ -78,7 +85,40 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate adds the columns introduced after the first release to databases created earlier.
+func migrate(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query("SELECT name FROM pragma_table_info('accounts')")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		have[n] = true
+	}
+	rows.Close()
+	if !have["group_name"] {
+		if _, err := db.Exec("ALTER TABLE accounts ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["manual"] {
+		if _, err := db.Exec("ALTER TABLE accounts ADD COLUMN manual INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

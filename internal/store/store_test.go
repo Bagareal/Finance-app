@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -325,5 +326,119 @@ func TestBackup(t *testing.T) {
 	defer b.Close()
 	if accs, _ := b.ListAccounts(); len(accs) != 1 || accs[0].InitialCents != 123 {
 		t.Errorf("backup non valido: %+v", accs)
+	}
+}
+
+func TestManualValueAccount(t *testing.T) {
+	s := newStore(t)
+	bank := mustAccount(t, s, "Corrente", 100000)
+	inv := &Account{Name: "Investments", Group: "Broker", Manual: true, InitialCents: 50000}
+	if err := s.CreateAccount(inv); err != nil {
+		t.Fatal(err)
+	}
+	// no value yet: behaves like a normal account
+	if got := balance(t, s, inv.ID); got != 50000 {
+		t.Fatalf("saldo senza valori = %d, atteso 50000", got)
+	}
+	// a transfer in, then the value is updated by hand
+	if err := s.CreateTx(&Tx{Date: "2026-02-01", Kind: "transfer", AmountCents: 20000, AccountID: bank.ID, ToAccountID: &inv.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := balance(t, s, inv.ID); got != 70000 {
+		t.Fatalf("saldo dopo versamento = %d, atteso 70000", got)
+	}
+	if err := s.SetValue(inv.ID, "2026-02-28", 75000); err != nil {
+		t.Fatal(err)
+	}
+	if got := balance(t, s, inv.ID); got != 75000 {
+		t.Fatalf("saldo dopo aggiornamento = %d, atteso 75000", got)
+	}
+	// a later transfer adds on top of the last value; an earlier one is already inside it
+	if err := s.CreateTx(&Tx{Date: "2026-03-05", Kind: "transfer", AmountCents: 10000, AccountID: bank.ID, ToAccountID: &inv.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := balance(t, s, inv.ID); got != 85000 {
+		t.Fatalf("saldo con versamento successivo = %d, atteso 85000", got)
+	}
+	// same-day update replaces the value
+	if err := s.SetValue(inv.ID, "2026-02-28", 76000); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetValue(inv.ID, "2026-03-31", 90000); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := s.ListValues(inv.ID)
+	if err != nil || len(vals) != 2 {
+		t.Fatalf("storico = %v, %v", vals, err)
+	}
+	// newest first: 90000 vs expected 76000+10000 = 86000 -> +4000; 76000 vs 50000+20000 -> +6000
+	if vals[0].ChangeCents != 4000 || vals[1].ChangeCents != 6000 {
+		t.Errorf("variazioni = %d, %d; attese 4000, 6000", vals[0].ChangeCents, vals[1].ChangeCents)
+	}
+	if got := balance(t, s, inv.ID); got != 90000 {
+		t.Errorf("saldo finale = %d, atteso 90000", got)
+	}
+	// gains are not income: the summary ignores them
+	sum, err := s.Summary(2026, 0)
+	if err != nil || sum.Income != 0 || sum.Expense != 0 {
+		t.Errorf("riepilogo = %+v, %v", sum, err)
+	}
+	if err := s.SetValue(bank.ID, "2026-03-31", 1); err == nil {
+		t.Error("un conto normale non deve accettare valori manuali")
+	}
+	if err := s.DeleteValue(vals[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := balance(t, s, inv.ID); got != 86000 { // back to 76000 + the 10000 transfer of 2026-03-05
+		t.Errorf("saldo dopo eliminazione = %d, atteso 86000", got)
+	}
+}
+
+func TestAccountGroupsAndCSVNames(t *testing.T) {
+	s := newStore(t)
+	a := &Account{Name: "Savings", Group: "Banca X"}
+	b := &Account{Name: "Savings", Group: "Banca Y"}
+	for _, x := range []*Account{a, b} {
+		if err := s.CreateAccount(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cat := mustCat(t, s, "Cibo", "expense", nil)
+	if err := s.CreateTx(&Tx{Date: "2026-01-02", Kind: "expense", AmountCents: 500, AccountID: b.ID, CategoryID: &cat.ID}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := s.ExportCSV(&buf, "en"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "Banca Y · Savings") {
+		t.Errorf("il CSV deve usare il nome completo del conto:\n%s", buf.String())
+	}
+	accs, _ := s.ListAccounts()
+	if len(accs) != 2 || accs[0].Group != "Banca X" {
+		t.Errorf("ordine dei conti = %+v", accs)
+	}
+}
+
+func TestMigrateOldDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'corrente',
+	  initial_cents INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0);
+	  INSERT INTO accounts(name, initial_cents) VALUES('Vecchio', 12345);`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, err := s.GetAccount(1)
+	if err != nil || a.Name != "Vecchio" || a.BalanceCents != 12345 || a.Group != "" || a.Manual {
+		t.Fatalf("conto migrato = %+v, %v", a, err)
 	}
 }

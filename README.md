@@ -13,6 +13,11 @@ currency*). The currency only sets the symbol and number format: nothing is conv
 
 - **Accounts**: several accounts (checking, cash, savings, card, investments) with an opening balance,
   archiving, and transfers between accounts. A transfer is neither income nor expense.
+  Accounts can be **grouped** (for example a bank with a current account and a savings account): the group
+  shows one line with the total and opens to show each account. An account can have its **value updated by
+  hand** (for example investments): each update is saved with its date, the app shows the gain or loss and a
+  small history chart, and transfers made after the last update are added to the value. Gains and losses are
+  not counted as income or expenses.
 - **Categories**: two levels (category and subcategory), separate for income and expenses. Create, rename
   and delete them; deleting a category in use asks where to move its transactions.
 - **Transactions**: add, edit or delete any transaction, including past ones. Filter by month, account,
@@ -92,7 +97,8 @@ Columns: `date, type, amount, account, destination_account, category, subcategor
 (`data, tipo, importo, conto, conto_destinazione, categoria, sottocategoria, nota`) are accepted too, and
 export uses the app language. `type` is `income`, `expense` or `transfer` (or `entrata`, `uscita`,
 `trasferimento`); when it is empty, a negative amount is an expense. Dates are `YYYY-MM-DD`. Missing accounts
-and categories are created. The whole file is validated before anything is imported.
+and categories are created. An account in a group is written as `Group · Name`. The whole file is validated
+before anything is imported.
 
 ## Development
 

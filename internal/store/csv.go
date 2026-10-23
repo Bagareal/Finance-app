@@ -63,7 +63,7 @@ func (s *Store) ExportCSV(w io.Writer, lang string) error {
 	}
 	accName := map[int64]string{}
 	for _, a := range accs {
-		accName[a.ID] = a.Name
+		accName[a.ID] = a.DisplayName()
 	}
 	catByID := map[int64]Category{}
 	for _, c := range cats {
@@ -185,7 +185,7 @@ func (s *Store) ImportCSV(data []byte) (int, error) {
 	}
 	accID := map[string]int64{}
 	for _, a := range accs {
-		accID[strings.ToLower(a.Name)] = a.ID
+		accID[strings.ToLower(a.DisplayName())] = a.ID
 	}
 	cats, err := s.ListCategories()
 	if err != nil {
