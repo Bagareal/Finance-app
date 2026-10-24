@@ -118,6 +118,11 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if !have["no_expenses"] {
+		if _, err := db.Exec("ALTER TABLE accounts ADD COLUMN no_expenses INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

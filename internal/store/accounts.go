@@ -8,8 +8,9 @@ type Account struct {
 	Type         string `json:"type"`
 	InitialCents int64  `json:"initial_cents"`
 	Archived     bool   `json:"archived"`
-	Group        string `json:"group"`  // accounts sharing a group name are shown together under it
-	Manual       bool   `json:"manual"` // the balance is a value updated by hand (investments); transfers after it still count
+	Group        string `json:"group"`       // accounts sharing a group name are shown together under it
+	Manual       bool   `json:"manual"`      // the balance is a value updated by hand (investments); transfers after it still count
+	NoExpenses   bool   `json:"no_expenses"` // not offered for new expenses; still offered for income and transfers
 	ValueDate    string `json:"value_date"`
 	BalanceCents int64  `json:"balance_cents"`
 }
@@ -34,7 +35,7 @@ func (a *Account) normalize() error {
 // For an account with manual values the balance starts from the latest value and only counts the
 // movements dated after it; the others start from the opening balance and count everything.
 const accountSelect = `
-SELECT a.id, a.name, a.type, a.initial_cents, a.archived, a.group_name, a.manual, COALESCE(lv.date, ''),
+SELECT a.id, a.name, a.type, a.initial_cents, a.archived, a.group_name, a.manual, a.no_expenses, COALESCE(lv.date, ''),
   CASE WHEN a.manual = 1 AND lv.date IS NOT NULL THEN lv.value_cents ELSE a.initial_cents END
   + COALESCE((SELECT SUM(CASE kind WHEN 'income' THEN amount_cents ELSE -amount_cents END)
               FROM transactions WHERE account_id = a.id AND (a.manual = 0 OR lv.date IS NULL OR date > lv.date)), 0)
@@ -52,7 +53,7 @@ func scanAccounts(rows interface {
 	out := []Account{}
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.InitialCents, &a.Archived, &a.Group, &a.Manual, &a.ValueDate, &a.BalanceCents); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.InitialCents, &a.Archived, &a.Group, &a.Manual, &a.NoExpenses, &a.ValueDate, &a.BalanceCents); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -97,8 +98,8 @@ func (s *Store) CreateAccount(a *Account) error {
 	if err := a.normalize(); err != nil {
 		return err
 	}
-	res, err := s.db.Exec("INSERT INTO accounts(name,type,initial_cents,archived,group_name,manual) VALUES(?,?,?,?,?,?)",
-		a.Name, a.Type, a.InitialCents, a.Archived, a.Group, a.Manual)
+	res, err := s.db.Exec("INSERT INTO accounts(name,type,initial_cents,archived,group_name,manual,no_expenses) VALUES(?,?,?,?,?,?,?)",
+		a.Name, a.Type, a.InitialCents, a.Archived, a.Group, a.Manual, a.NoExpenses)
 	if err != nil {
 		return err
 	}
@@ -110,8 +111,8 @@ func (s *Store) UpdateAccount(a *Account) error {
 	if err := a.normalize(); err != nil {
 		return err
 	}
-	res, err := s.db.Exec("UPDATE accounts SET name=?, type=?, initial_cents=?, archived=?, group_name=?, manual=? WHERE id=?",
-		a.Name, a.Type, a.InitialCents, a.Archived, a.Group, a.Manual, a.ID)
+	res, err := s.db.Exec("UPDATE accounts SET name=?, type=?, initial_cents=?, archived=?, group_name=?, manual=?, no_expenses=? WHERE id=?",
+		a.Name, a.Type, a.InitialCents, a.Archived, a.Group, a.Manual, a.NoExpenses, a.ID)
 	if err != nil {
 		return err
 	}

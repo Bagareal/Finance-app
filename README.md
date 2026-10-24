@@ -20,6 +20,8 @@ currency*). The currency only sets the symbol and number format: nothing is conv
   An account can have its **value updated by hand** (for example investments): each update is saved with its
   date, the app shows the gain or loss and a small history chart, and transfers made after the last update
   are added to the value. Gains and losses are not counted as income or expenses.
+  An account can be marked **Do not use for expenses**: it is then left out of the account list when you add an
+  expense, but stays available for income (an interest, for example) and for transfers.
 - **Categories**: two levels (category and subcategory), separate for income and expenses. Create, rename
   and delete them; deleting a category in use asks where to move its transactions.
 - **Transactions**: add, edit or delete any transaction, including past ones. Filter by month, account,
@@ -27,6 +29,8 @@ currency*). The currency only sets the symbol and number format: nothing is conv
 - **Recurring transactions**: weekly, monthly or yearly income, expenses and transfers, with an optional end
   date. Missed occurrences are created when the server starts. Editing or deleting a transaction that came
   from a recurrence asks whether to change only that one, it and the following ones, or all of them.
+  Editing or deleting the rule itself from the *Recurring* page asks whether to touch only the next ones or also
+  the transactions already created.
 - **Summary**: earned, spent and saved for any month or year, with a chart by category and a monthly trend.
 - **Pro**: a separate section (in the side menu, or under *More* on a phone) for a freelance or small business
   activity. It is independent from accounts and transactions and changes none of their figures.

@@ -300,7 +300,11 @@ func (s *Server) routes(web fs.FS) {
 			return nil, err
 		}
 		x.ID = id
-		if err := s.st.UpdateRecurring(&x); err != nil {
+		update := s.st.UpdateRecurring
+		if r.URL.Query().Get("history") == "1" {
+			update = s.st.UpdateRecurringHistory
+		}
+		if err := update(&x); err != nil {
 			return nil, err
 		}
 		s.st.RunRecurring("")
@@ -310,6 +314,9 @@ func (s *Server) routes(web fs.FS) {
 		id, err := pathID(r)
 		if err != nil {
 			return nil, err
+		}
+		if r.URL.Query().Get("history") == "1" {
+			return nil, s.st.DeleteRecurringHistory(id)
 		}
 		return nil, s.st.DeleteRecurring(id)
 	}))
