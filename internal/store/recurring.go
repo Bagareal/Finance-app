@@ -91,16 +91,56 @@ func (s *Store) UpdateRecurring(r *Recurring) error {
 	return err
 }
 
-// DeleteRecurring elimina la ricorrenza; i movimenti già generati restano.
-func (s *Store) DeleteRecurring(id int64) error {
-	res, err := s.db.Exec("DELETE FROM recurring WHERE id=?", id)
+// UpdateRecurringHistory aggiorna la ricorrenza e allinea ai nuovi valori anche i movimenti già generati
+// (tipo, importo, conti, categoria e nota; le date restano quelle di ogni movimento).
+func (s *Store) UpdateRecurringHistory(r *Recurring) error {
+	if err := s.UpdateRecurring(r); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE transactions SET kind=?,amount_cents=?,account_id=?,to_account_id=?,category_id=?,note=? WHERE recurring_id=?`,
+		r.Kind, r.AmountCents, r.AccountID, r.ToAccountID, r.CategoryID, r.Note, r.ID)
+	return err
+}
+
+// DeleteRecurringHistory elimina la ricorrenza insieme ai movimenti già generati.
+func (s *Store) DeleteRecurringHistory(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM transactions WHERE recurring_id=?", id); err != nil {
+		return err
+	}
+	res, err := tx.Exec("DELETE FROM recurring WHERE id=?", id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
+}
+
+// DeleteRecurring elimina la ricorrenza; i movimenti già generati restano, ma senza più il legame con essa
+// (altrimenti una nuova ricorrenza che riusa lo stesso id li adotterebbe).
+func (s *Store) DeleteRecurring(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec("DELETE FROM recurring WHERE id=?", id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec("UPDATE transactions SET recurring_id=NULL WHERE recurring_id=?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func daysIn(y int, m time.Month) int { return time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC).Day() }

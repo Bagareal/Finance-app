@@ -188,3 +188,93 @@ func TestDeleteScopeOneLeavesTheRest(t *testing.T) {
 		t.Errorf("movimento rigenerato: %d", len(got))
 	}
 }
+
+func TestUpdateRecurringHistoryChangesPastToo(t *testing.T) {
+	s := newStore(t)
+	rid, _, _ := setupRecurring(t, s)
+	list, _ := s.ListRecurring()
+	r := list[0]
+	r.AmountCents = 65000
+	if err := s.UpdateRecurringHistory(&r); err != nil {
+		t.Fatal(err)
+	}
+	if got := amounts(t, s); !eq(got, []int64{65000, 65000, 65000, 65000}) {
+		t.Errorf("importi: %v", got)
+	}
+	if n, _ := s.RunRecurring("2026-05-30"); n != 1 {
+		t.Errorf("il passato non deve essere rigenerato: %d nuovi", n)
+	}
+	_ = rid
+}
+
+func TestUpdateRecurringWithoutHistoryKeepsPast(t *testing.T) {
+	s := newStore(t)
+	setupRecurring(t, s)
+	list, _ := s.ListRecurring()
+	r := list[0]
+	r.AmountCents = 65000
+	if err := s.UpdateRecurring(&r); err != nil {
+		t.Fatal(err)
+	}
+	if got := amounts(t, s); !eq(got, []int64{50000, 50000, 50000, 50000}) {
+		t.Errorf("importi: %v", got)
+	}
+}
+
+func TestDeleteRecurringHistoryRemovesTransactions(t *testing.T) {
+	s := newStore(t)
+	rid, _, _ := setupRecurring(t, s)
+	if err := s.DeleteRecurringHistory(rid); err != nil {
+		t.Fatal(err)
+	}
+	if got := amounts(t, s); len(got) != 0 {
+		t.Errorf("movimenti rimasti: %v", got)
+	}
+	if list, _ := s.ListRecurring(); len(list) != 0 {
+		t.Errorf("ricorrenza rimasta: %+v", list)
+	}
+	if err := s.DeleteRecurringHistory(rid); err != ErrNotFound {
+		t.Errorf("atteso ErrNotFound, ottenuto %v", err)
+	}
+}
+
+func TestAccountNoExpensesFlagPersists(t *testing.T) {
+	s := newStore(t)
+	a := &Account{Name: "Fondo", NoExpenses: true}
+	if err := s.CreateAccount(a); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetAccount(a.ID)
+	if !got.NoExpenses {
+		t.Fatal("flag no_expenses non salvato")
+	}
+	got.NoExpenses = false
+	if err := s.UpdateAccount(got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.GetAccount(a.ID); again.NoExpenses {
+		t.Error("flag no_expenses non rimosso")
+	}
+}
+
+func TestDeleteRecurringKeepsTransactionsButUnlinksThem(t *testing.T) {
+	s := newStore(t)
+	rid, a, _ := setupRecurring(t, s)
+	if err := s.DeleteRecurring(rid); err != nil {
+		t.Fatal(err)
+	}
+	if got := amounts(t, s); len(got) != 4 {
+		t.Fatalf("i movimenti dovevano restare: %v", got)
+	}
+	// una nuova ricorrenza riusa l'id: non deve adottare i vecchi movimenti
+	r := &Recurring{Kind: "expense", AmountCents: 1000, AccountID: a.ID, Freq: "monthly", StartDate: "2026-06-01", Active: true}
+	if err := s.CreateRecurring(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRecurringHistory(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := amounts(t, s); len(got) != 4 {
+		t.Errorf("i vecchi movimenti non dovevano sparire: %v", got)
+	}
+}

@@ -193,6 +193,20 @@ function ScopeModal({ type, dateChanged, onPick, onClose }) {
     <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button></div></${Modal}>`;
 }
 
+// asked when a recurring rule is edited or deleted from the Recurring page: touch the transactions already created too?
+function HistoryModal({ del, onPick, onClose }) {
+  const opts = [
+    ['one', del ? t('Delete only the rule') : t('Change only the next ones'), del ? t('Transactions already created are kept.') : t('Transactions already created stay as they are.')],
+    ['all', del ? t('Delete the rule and its transactions') : t('Change the transactions already created too'), del ? t('All transactions created by this rule are deleted.') : t('Amount, accounts, category and note; dates stay.')],
+  ];
+  return html`<${Modal} title=${del ? t('Delete the recurring item?') : t('Edit recurring')} onClose=${onClose}>
+    <div style="display:grid;gap:8px">
+      ${opts.map(([k, label, hint]) => html`<button class=${'btn' + (del && k === 'all' ? ' danger' : '')} style="text-align:left;padding:10px 14px" onClick=${() => onPick(k)}>
+        <b>${label}</b><div class="muted" style="font-size:.85rem">${hint}</div></button>`)}
+    </div>
+    <div class="actions"><button class="btn" onClick=${onClose}>${t('Cancel')}</button></div></${Modal}>`;
+}
+
 /* ---------- transaction / recurring modal ---------- */
 
 function catOptions(categories, kind) {
@@ -207,13 +221,18 @@ function catOptions(categories, kind) {
 
 function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
   const accounts = ctx.accounts.filter((a) => !a.archived || (item && (item.account_id === a.id || item.to_account_id === a.id)));
+  // accounts marked "no expenses" are not offered for an expense, unless it is the one already on the item
+  const usable = (kind) => {
+    const ok = kind !== 'expense' ? accounts : accounts.filter((a) => !a.no_expenses || (item && item.account_id === a.id));
+    return ok.length ? ok : accounts;
+  };
   const lastAcc = Number(localStorage.getItem('fa_acc'));
   const [f, setF] = useState(() => item ? {
     kind: item.kind, amount: toInput(item.amount_cents), date: rec ? item.start_date : item.date, account_id: item.account_id,
     to_account_id: item.to_account_id || '', category_id: item.category_id || '', note: item.note,
     freq: item.freq || 'monthly', end_date: item.end_date || '', active: item.active !== false,
   } : {
-    kind: kind0 || 'expense', amount: '', date: todayStr(), account_id: accounts.find((a) => a.id === lastAcc)?.id || accounts[0]?.id || '',
+    kind: kind0 || 'expense', amount: '', date: todayStr(), account_id: usable(kind0 || 'expense').find((a) => a.id === lastAcc)?.id || usable(kind0 || 'expense')[0]?.id || '',
     to_account_id: '', category_id: '', note: '', freq: 'monthly', end_date: '', active: true,
   });
   const [err, setErr] = useState('');
@@ -234,7 +253,7 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
     setBusy(true);
     try {
       const path = rec ? '/recurring' : '/transactions';
-      const q = scope ? `?scope=${scope}` : '';
+      const q = !scope ? '' : rec ? (scope === 'all' ? '?history=1' : '') : `?scope=${scope}`;
       await (item ? api('PUT', `${path}/${item.id}${q}`, body) : api('POST', path, body));
       localStorage.setItem('fa_acc', f.account_id);
       ctx.bump();
@@ -251,23 +270,24 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
     };
     if (rec) Object.assign(body, { freq: f.freq, start_date: f.date, end_date: f.end_date, active: f.active });
     else body.date = f.date;
-    if (generated) setAsk({ type: 'save', body });
+    if (generated || (rec && item)) setAsk({ type: 'save', body });
     else send(body);
   };
   const remove = async (scope) => {
-    try { await api('DELETE', `/transactions/${item.id}?scope=${scope}`); ctx.bump(); onClose(); }
-    catch (e) { setErr(e.message); setAsk(null); }
+    try {
+      await api('DELETE', rec ? `/recurring/${item.id}${scope === 'all' ? '?history=1' : ''}` : `/transactions/${item.id}?scope=${scope}`);
+      ctx.bump(); onClose();
+    } catch (e) { setErr(e.message); setAsk(null); }
   };
-  const del = () => generated ? setAsk({ type: 'del' }) : ctx.confirm({
-    title: rec ? t('Delete the recurring item?') : t('Delete the transaction?'),
-    text: rec ? t('Transactions already created are kept.') : t('This cannot be undone.'),
-    run: async () => { await api('DELETE', `${rec ? '/recurring' : '/transactions'}/${item.id}`); ctx.bump(); onClose(); },
+  const del = () => (generated || rec) ? setAsk({ type: 'del' }) : ctx.confirm({
+    title: t('Delete the transaction?'), text: t('This cannot be undone.'),
+    run: async () => { await api('DELETE', `/transactions/${item.id}`); ctx.bump(); onClose(); },
   });
 
   const title = item ? (rec ? t('Edit recurring') : t('Edit transaction')) : (rec ? t('New recurring') : t('New transaction'));
   return html`<${Fragment}><${Modal} title=${title} onClose=${onClose}>
     <div class="seg" style="margin-bottom:14px">
-      ${Object.entries(KIND).map(([k, v]) => html`<button type="button" class=${f.kind === k ? 'on' : ''} onClick=${() => setF({ ...f, kind: k, category_id: '' })}>${t(v)}</button>`)}
+      ${Object.entries(KIND).map(([k, v]) => html`<button type="button" class=${f.kind === k ? 'on' : ''} onClick=${() => setF({ ...f, kind: k, category_id: '', account_id: usable(k).some((a) => String(a.id) === String(f.account_id)) ? f.account_id : usable(k)[0]?.id || '' })}>${t(v)}</button>`)}
     </div>
     <div class="two">
       <label class="f">${t('Amount ({symbol})', { symbol: currencySymbol() })}<input inputmode="decimal" placeholder=${amountPlaceholder()} value=${f.amount} onInput=${set('amount')} autofocus /></label>
@@ -275,7 +295,7 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
     </div>
     <div class=${f.kind === 'transfer' ? 'two' : ''}>
       <label class="f">${f.kind === 'transfer' ? t('From account') : t('Account')}
-        <select value=${f.account_id} onChange=${set('account_id')}>${accounts.map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select></label>
+        <select value=${f.account_id} onChange=${set('account_id')}>${usable(f.kind).map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select></label>
       ${f.kind === 'transfer' && html`<label class="f">${t('To account')}
         <select value=${f.to_account_id} onChange=${set('to_account_id')}><option value="">—</option>
           ${accounts.filter((a) => String(a.id) !== String(f.account_id)).map((a) => html`<option value=${a.id}>${accLabel(a)}</option>`)}</select></label>`}
@@ -294,8 +314,10 @@ function FlowModal({ ctx, item, kind: kind0, rec, onClose }) {
       <button class="btn" onClick=${onClose}>${t('Cancel')}</button>
       <button class="btn primary" disabled=${busy} onClick=${save}>${t('Save')}</button>
     </div></${Modal}>
-    ${ask && html`<${ScopeModal} type=${ask.type} dateChanged=${item && f.date !== item.date}
-      onPick=${(scope) => (ask.type === 'save' ? send(ask.body, scope) : remove(scope))} onClose=${() => setAsk(null)} />`}</${Fragment}>`;
+    ${ask && (rec
+      ? html`<${HistoryModal} del=${ask.type === 'del'} onPick=${(scope) => (ask.type === 'save' ? send(ask.body, scope) : remove(scope))} onClose=${() => setAsk(null)} />`
+      : html`<${ScopeModal} type=${ask.type} dateChanged=${item && f.date !== item.date}
+      onPick=${(scope) => (ask.type === 'save' ? send(ask.body, scope) : remove(scope))} onClose=${() => setAsk(null)} />`)}</${Fragment}>`;
 }
 
 /* ---------- transaction rows ---------- */
@@ -478,15 +500,15 @@ function Summary({ ctx }) {
 
 function AccountModal({ ctx, item, preset, onClose }) {
   const [f, setF] = useState(item
-    ? { name: item.name, type: item.type, initial: toInput(item.initial_cents), archived: item.archived, group: item.group, manual: item.manual }
-    : { name: '', type: 'corrente', initial: '', archived: false, group: preset?.group || '', manual: false });
+    ? { name: item.name, type: item.type, initial: toInput(item.initial_cents), archived: item.archived, group: item.group, manual: item.manual, no_expenses: item.no_expenses }
+    : { name: '', type: 'corrente', initial: '', archived: false, group: preset?.group || '', manual: false, no_expenses: false });
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const groups = [...new Set(ctx.accounts.map((a) => a.group).filter(Boolean))];
   const save = async () => {
     const init = f.initial.trim() === '' ? 0 : parseCents(f.initial);
     if (Number.isNaN(init)) return setErr(t('Invalid opening balance'));
-    const body = { name: f.name, type: f.type, initial_cents: init, archived: f.archived, group: f.group, manual: f.manual };
+    const body = { name: f.name, type: f.type, initial_cents: init, archived: f.archived, group: f.group, manual: f.manual, no_expenses: f.no_expenses };
     try { await (item ? api('PUT', `/accounts/${item.id}`, body) : api('POST', '/accounts', body)); ctx.bump(); onClose(); } catch (e) { setErr(e.message); }
   };
   const del = () => ctx.confirm({
@@ -502,6 +524,8 @@ function AccountModal({ ctx, item, preset, onClose }) {
     <datalist id="acc-groups">${groups.map((g) => html`<option value=${g}></option>`)}</datalist>
     <label class="check"><input type="checkbox" checked=${f.manual} onChange=${set('manual')} /> ${t('Value updated by hand (e.g. investments)')}</label>
     ${f.manual && html`<p class="muted" style="margin:-4px 0 12px;font-size:.85rem">${t('Transfers made after the last update are added to the value.')}</p>`}
+    <label class="check"><input type="checkbox" checked=${f.no_expenses} onChange=${set('no_expenses')} /> ${t('Do not use for expenses')}</label>
+    ${f.no_expenses && html`<p class="muted" style="margin:-4px 0 12px;font-size:.85rem">${t('The account is not offered for new expenses. Income and transfers still are.')}</p>`}
     ${item && html`<label class="check"><input type="checkbox" checked=${f.archived} onChange=${set('archived')} /> ${t('Archived (hidden from new transactions)')}</label>`}
     ${err && html`<p class="err">${err}</p>`}
     <div class="actions">${item && html`<button class="btn danger left" onClick=${del}>${t('Delete')}</button>`}
@@ -1056,6 +1080,7 @@ function Shell({ st, reload, onLogout }) {
   const [modal, setModal] = useState(null);
   const [conf, setConf] = useState(null);
   const [msg, setMsg] = useState('');
+  const [delRec, setDelRec] = useState(null); // a recurring rule waiting for the choice about its transactions
   const [delScope, setDelScope] = useState(null); // a transaction from a recurring series waiting for the scope choice
   const [hide, setHide] = useState(() => { try { return localStorage.getItem('fa_hide') === '1'; } catch { return false; } });
 
@@ -1090,10 +1115,7 @@ function Shell({ st, reload, onLogout }) {
         title: t('Delete the transaction?'), text: t('This cannot be undone.'),
         run: async () => { await api('DELETE', `/transactions/${tx.id}`); setTick((x) => x + 1); },
       })),
-      deleteRec: (r) => setConf({
-        title: t('Delete the recurring item?'), text: t('Transactions already created are kept.'),
-        run: async () => { await api('DELETE', `/recurring/${r.id}`); setTick((x) => x + 1); },
-      }),
+      deleteRec: (r) => setDelRec(r),
     };
   }, [data, tick, hide]);
 
@@ -1107,6 +1129,11 @@ function Shell({ st, reload, onLogout }) {
     ${page !== 'pro' && html`<button class="fab" aria-label=${t('New transaction')} onClick=${() => ctx.openTx(null)}>+</button>`}
     ${modal && html`<${FlowModal} ctx=${ctx} item=${modal.item} kind=${modal.kind} rec=${modal.rec} onClose=${() => setModal(null)} />`}
     ${conf && html`<${Confirm} title=${conf.title} text=${conf.text} onClose=${() => setConf(null)} onYes=${async () => { try { await conf.run(); } catch (e) { toast(e.message); } setConf(null); }} />`}
+    ${delRec && html`<${HistoryModal} del=${true} onClose=${() => setDelRec(null)}
+      onPick=${async (scope) => {
+        try { await api('DELETE', `/recurring/${delRec.id}${scope === 'all' ? '?history=1' : ''}`); ctx.bump(); } catch (e) { toast(e.message); }
+        setDelRec(null);
+      }} />`}
     ${delScope && html`<${ScopeModal} type="del" onClose=${() => setDelScope(null)}
       onPick=${async (scope) => {
         try { await api('DELETE', `/transactions/${delScope.id}?scope=${scope}`); ctx.bump(); } catch (e) { toast(e.message); }
