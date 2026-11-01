@@ -231,6 +231,48 @@ func TestRecurringBackfillAndEnd(t *testing.T) {
 	}
 }
 
+func TestRecurringChangeStartDay(t *testing.T) {
+	s := newStore(t)
+	a := mustAccount(t, s, "A", 0)
+	r := &Recurring{Kind: "expense", AmountCents: 1000, AccountID: a.ID, Freq: "monthly", StartDate: "2026-10-17", Active: true}
+	s.CreateRecurring(r)
+	s.RunRecurring("2026-10-20") // crea il 17 ottobre, prossima 17 novembre
+	next := func() string {
+		l, _ := s.ListRecurring()
+		return l[0].NextDate
+	}
+	if next() != "2026-11-17" {
+		t.Fatalf("prossima = %s", next())
+	}
+	// cambio il giorno in 1: la prossima è il 1 novembre, il passato non si rigenera
+	r.StartDate = "2026-10-01"
+	if err := s.UpdateRecurring(r); err != nil {
+		t.Fatal(err)
+	}
+	if next() != "2026-11-01" {
+		t.Errorf("prossima = %s, attesa 2026-11-01", next())
+	}
+	if n, _ := s.RunRecurring("2026-11-01"); n != 1 {
+		t.Errorf("generati %d, attesi 1", n)
+	}
+	txs, _ := s.ListTx(TxFilter{})
+	if len(txs) != 2 {
+		t.Errorf("movimenti = %d, attesi 2", len(txs))
+	}
+	// modificare solo l'importo non sposta la prossima data
+	r.AmountCents = 2000
+	s.UpdateRecurring(r)
+	if next() != "2026-12-01" {
+		t.Errorf("prossima = %s, attesa 2026-12-01", next())
+	}
+	// spostare l'inizio in avanti
+	r.StartDate = "2027-03-05"
+	s.UpdateRecurring(r)
+	if next() != "2027-03-05" {
+		t.Errorf("prossima = %s, attesa 2027-03-05", next())
+	}
+}
+
 func TestNextOccurrenceYearlyLeap(t *testing.T) {
 	start := time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC)
 	n1 := NextOccurrence("yearly", start, start)

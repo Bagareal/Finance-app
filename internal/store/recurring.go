@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"strings"
 	"time"
 )
@@ -77,13 +78,23 @@ func (s *Store) UpdateRecurring(r *Recurring) error {
 	if err := s.validateRecurring(r); err != nil {
 		return err
 	}
-	var next string
-	if err := s.db.QueryRow("SELECT next_date FROM recurring WHERE id=?", r.ID).Scan(&next); err != nil {
+	var next, oldStart, oldFreq string
+	if err := s.db.QueryRow("SELECT next_date, start_date, freq FROM recurring WHERE id=?", r.ID).Scan(&next, &oldStart, &oldFreq); err != nil {
 		return ErrNotFound
 	}
-	// non rigenera il passato già generato: next_date avanza solo se l'inizio viene spostato in avanti
-	if r.StartDate > next {
-		next = r.StartDate
+	// se cambia l'inizio o la frequenza, la prossima data riparte dal nuovo calendario:
+	// la prima occorrenza dopo l'ultimo movimento già generato (il passato non si rigenera)
+	if r.StartDate != oldStart || r.Freq != oldFreq {
+		var last sql.NullString
+		if err := s.db.QueryRow("SELECT MAX(date) FROM transactions WHERE recurring_id=?", r.ID).Scan(&last); err != nil {
+			return err
+		}
+		start, _ := time.Parse("2006-01-02", r.StartDate)
+		cur := start
+		for i := 0; i < 5000 && last.Valid && cur.Format("2006-01-02") <= last.String; i++ {
+			cur = NextOccurrence(r.Freq, start, cur)
+		}
+		next = cur.Format("2006-01-02")
 	}
 	r.NextDate = next
 	_, err := s.db.Exec(`UPDATE recurring SET kind=?,amount_cents=?,account_id=?,to_account_id=?,category_id=?,note=?,freq=?,start_date=?,end_date=?,next_date=?,active=? WHERE id=?`,
